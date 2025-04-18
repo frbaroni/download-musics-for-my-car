@@ -1,0 +1,12 @@
+{
+  "name": "sync-yt",
+  "scripts": {
+    "sync": "ts-node sync-yt.ts"
+  },
+  "dependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "fs-extra": "^11.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}
