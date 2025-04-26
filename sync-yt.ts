@@ -154,6 +154,7 @@ interface TrackInfo {
     progress?: number;
     size?: string;
     eta?: string;
+    speed?: string;
     process?: ReturnType<typeof spawn>;
 }
 
@@ -407,10 +408,12 @@ const updateActiveDownloads = throttle((activeDownloads: Map<string, TrackInfo>)
                     chalk.blue('🔄 Transcoding') : 
                     chalk.green('✓ ' + info.status);
             
-            const progress = info.progress ? ` ${info.progress.toFixed(1)}%` : '';
-            const eta = info.eta ? ` ETA: ${info.eta}` : '';
+            const progress = info.progress ? `   ${info.progress.toFixed(1)}%` : '';
+            const eta = info.eta ? `   ETA: ${info.eta}` : '';
+            const speed = info.speed ? `   Speed: ${info.speed}` : '';
+            const size = info.size ? `   Size: ${info.size}` : '';
             
-            content += `  ${chalk.white(title.substring(0, 40))}${title.length > 40 ? '...' : ''} - ${status}${progress}${eta}\n`;
+            content += `  ${chalk.white(title.substring(0, 40))}${title.length > 40 ? '...' : ''} - ${status}${progress}${size}${speed}${eta}\n`;
         });
     }
     
@@ -560,11 +563,13 @@ async function downloadTrack(url: string): Promise<void> {
                     downloadProcess.stderr.on('data', (data) => {
                         const errorText = data.toString();
                         // Try to parse progress information from yt-dlp
-                        const progressMatch = errorText.match(/(\d+\.\d+)%\s+of\s+~?(\d+\.\d+)(\w+)\s+at\s+(\d+\.\d+)(\w+)\/s\s+ETA\s+(\d+:\d+)/);
+                        // Example: [download]   4.7% of ~ 153.81MiB at    2.19MiB/s ETA 01:12 (frag 41/926)
+                        const progressMatch = errorText.match(/\[download\]\s+(\d+\.\d+)%\s+of\s+~?\s*(\d+\.\d+)(\w+)\s+at\s+(\d+\.\d+)(\w+)\/s\s+ETA\s+(\d+:\d+)/);
                         if (progressMatch) {
                             const [, percent, size, sizeUnit, speed, speedUnit, eta] = progressMatch;
                             trackInfo.progress = parseFloat(percent);
                             trackInfo.size = `${size}${sizeUnit}`;
+                            trackInfo.speed = `${speed}${speedUnit}/s`;
                             trackInfo.eta = eta;
                             activeDownloads.set(url, trackInfo);
                             updateActiveDownloads(activeDownloads);
