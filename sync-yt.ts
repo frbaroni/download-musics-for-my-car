@@ -53,8 +53,8 @@ const log = (function() {
         }
         
         try {
-            // Log to UI
-            logBox.log(formattedMessage);
+            // Log to UI - use pushLine instead of log to ensure proper containment
+            logBox.pushLine(formattedMessage);
             // Also log to console for debugging
             console.log(`${timestamp} ${message}`);
             
@@ -185,6 +185,11 @@ try {
 screen.on('resize', () => {
     checkTerminalSize();
     try {
+        // Reflow the log box content on resize
+        logBox.setContent('');
+        for (const line of logBuffer.slice(-50)) { // Show last 50 lines on resize
+            logBox.pushLine(line);
+        }
         screen.render();
     } catch (error) {
         console.error('Error rendering after resize:', error);
@@ -232,9 +237,10 @@ const progressBar = blessed.progressbar({
 const logBox = blessed.log({
     parent: screen,
     top: 6,
+    bottom: 8, // Set bottom position to leave space for active downloads and status
     left: 0,
     width: '100%',
-    height: '70%',
+    height: 'shrink', // Use shrink to fit between top and bottom
     border: 'line',
     scrollable: true,
     mouse: true,
