@@ -8,6 +8,25 @@ import chalk from 'chalk';
 // Using require for p-limit since it's a CommonJS module in our setup
 const pLimit = require('p-limit');
 
+// Helper function to convert time format (HH:MM:SS.ms) to seconds
+function timeToSeconds(time: string): number {
+    const parts = time.split(':');
+    if (parts.length === 3) {
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        const seconds = parseFloat(parts[2]);
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+    return 0;
+}
+
+// Helper function to format seconds to MM:SS
+function formatTime(seconds: number): string {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.floor(seconds % 60);
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
 // For throttling UI updates
 let throttle: Function;
 try {
@@ -540,6 +559,16 @@ async function downloadTrack(url: string): Promise<void> {
                 if (downloadProcess.stderr) {
                     downloadProcess.stderr.on('data', (data) => {
                         const errorText = data.toString();
+                        // Try to parse progress information from yt-dlp
+                        const progressMatch = errorText.match(/(\d+\.\d+)%\s+of\s+~?(\d+\.\d+)(\w+)\s+at\s+(\d+\.\d+)(\w+)\/s\s+ETA\s+(\d+:\d+)/);
+                        if (progressMatch) {
+                            const [, percent, size, sizeUnit, speed, speedUnit, eta] = progressMatch;
+                            trackInfo.progress = parseFloat(percent);
+                            trackInfo.size = `${size}${sizeUnit}`;
+                            trackInfo.eta = eta;
+                            activeDownloads.set(url, trackInfo);
+                            updateActiveDownloads(activeDownloads);
+                        }
                         log(chalk.yellow(`Download warning: ${errorText.trim()}`));
                     });
                 }
@@ -611,7 +640,36 @@ async function downloadTrack(url: string): Promise<void> {
                         // FFmpeg outputs progress to stderr
                         transcodeOutput += text;
                         
-                        // Could parse progress here if needed
+                        // Try to parse FFmpeg progress information
+                        const timeMatch = text.match(/time=(\d+:\d+:\d+\.\d+)/);
+                        if (timeMatch) {
+                            const time = timeMatch[1];
+                            
+                            // Look for duration in the accumulated output
+                            const durationMatch = transcodeOutput.match(/Duration: (\d+:\d+:\d+\.\d+)/);
+                            
+                            if (durationMatch) {
+                                const duration = durationMatch[1];
+                                
+                                // Convert time and duration to seconds
+                                const timeSeconds = timeToSeconds(time);
+                                const durationSeconds = timeToSeconds(duration);
+                                
+                                if (durationSeconds > 0) {
+                                    const percent = (timeSeconds / durationSeconds) * 100;
+                                    trackInfo.progress = percent;
+                                    
+                                    // Calculate ETA
+                                    const remainingSeconds = durationSeconds - timeSeconds;
+                                    if (remainingSeconds > 0) {
+                                        trackInfo.eta = formatTime(remainingSeconds);
+                                    }
+                                    
+                                    activeDownloads.set(url, trackInfo);
+                                    updateActiveDownloads(activeDownloads);
+                                }
+                            }
+                        }
                     });
                 }
                 
