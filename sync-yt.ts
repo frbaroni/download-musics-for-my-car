@@ -124,14 +124,17 @@ const config = {
 // Directory to save the downloaded music
 const downloadDirectory = path.join(__dirname, "/Downloaded");
 const stateFile = path.join(__dirname, "/sync_state.json");
-const fallbackFormat = 'bestvideo+bestaudio/best[height<=1080]';
+// More flexible format selection to handle signature extraction issues
+const fallbackFormat = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best';
 // Additional yt-dlp parameters to help with signature extraction issues
 const ytdlpExtraParams = [
     '--no-check-certificates',  // Skip HTTPS certificate validation
-    '--extractor-args', 'youtube:player_client=android',  // Try alternative player client
     '--force-ipv4',  // Force IPv4 to avoid some CDN issues
     '--geo-bypass',  // Bypass geo-restrictions
-    '--ignore-errors'  // Continue on download errors
+    '--ignore-errors',  // Continue on download errors
+    '--extractor-retries', '10',  // Increase extraction retries
+    '--skip-unavailable-fragments',  // Skip unavailable fragments
+    '--no-check-formats'  // Don't check formats before downloading
 ];
 
 interface TrackState {
@@ -604,6 +607,8 @@ async function downloadTrack(url: string): Promise<void> {
                 '-f', fallbackFormat, 
                 '--force-overwrites',  // Force overwrite if needed
                 '--no-playlist',  // Ensure we only download the single video
+                '--downloader', 'aria2c',  // Try using aria2c downloader for better reliability
+                '--downloader-args', 'aria2c:"-x 16 -s 16 -k 1M"',  // Optimize aria2c parameters
                 ...ytdlpExtraParams,  // Add our extra parameters for handling signature issues
                 '-o', outputPath, 
                 url
@@ -884,6 +889,15 @@ async function checkRequirements(): Promise<boolean> {
             try {
                 const updateOutput = await execAsync('yt-dlp', ['--update-to', 'latest']);
                 log(chalk.green(`✓ yt-dlp update: ${updateOutput.trim()}`));
+                
+                // Also try to update the youtube-dl extractor
+                log(chalk.blue('🔄 Updating extractors...'));
+                try {
+                    const extractorOutput = await execAsync('yt-dlp', ['--update-extractors']);
+                    log(chalk.green(`✓ Extractors update: ${extractorOutput.trim()}`));
+                } catch (extractorError) {
+                    log(chalk.yellow(`⚠ Could not update extractors: ${extractorError}`));
+                }
             } catch (updateError) {
                 log(chalk.yellow(`⚠ Could not auto-update yt-dlp: ${updateError}`));
                 log(chalk.yellow('This is not critical, but using the latest version is recommended'));
