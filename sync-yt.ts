@@ -10,6 +10,13 @@ const pLimit = require('p-limit');
 // For throttling UI updates
 const throttle = require('lodash.throttle');
 
+// UI refresh control constants
+const RENDER_THROTTLE_MS = 100; // Minimum time between renders
+const LOG_BUFFER_SIZE = 1000; // Maximum number of log lines to keep
+const logBuffer: string[] = [];
+let uiNeedsUpdate = false;
+let lastScreenRender = Date.now();
+
 
 // Throttled log function to prevent UI freezing with too many updates
 const log = (function() {
@@ -108,12 +115,6 @@ interface TrackInfo {
 // Track all child processes
 const activeProcesses: Set<ReturnType<typeof spawn>> = new Set();
 
-// UI refresh control
-const LOG_BUFFER_SIZE = 1000; // Maximum number of log lines to keep
-const logBuffer: string[] = [];
-let uiNeedsUpdate = false;
-let lastScreenRender = Date.now();
-const RENDER_THROTTLE_MS = 100; // Minimum time between renders
 
 let appState: AppState = {
     tracks: {},
