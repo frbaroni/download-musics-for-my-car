@@ -36,6 +36,8 @@ const config = {
 // Directory to save the downloaded music
 const downloadDirectory = path.join(__dirname, "/Downloaded");
 const stateFile = path.join(__dirname, "/sync_state.json");
+const cacheFile = path.join(__dirname, "/sync_cache.json");
+const errorsFile = path.join(__dirname, "/sync_errors.log");
 const fallbackFormat = 'bestvideo+bestaudio/best';
 
 interface TrackState {
