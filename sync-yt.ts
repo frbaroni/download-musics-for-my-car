@@ -7,6 +7,8 @@ import blessed from 'blessed';
 import chalk from 'chalk';
 // Using require for p-limit since it's a CommonJS module in our setup
 const pLimit = require('p-limit');
+// For throttling UI updates
+const throttle = require('lodash.throttle');
 
 // Configuration
 const config = {
@@ -73,6 +75,13 @@ interface TrackInfo {
 // Track all child processes
 const activeProcesses: Set<ReturnType<typeof spawn>> = new Set();
 
+// UI refresh control
+const LOG_BUFFER_SIZE = 1000; // Maximum number of log lines to keep
+const logBuffer: string[] = [];
+let uiNeedsUpdate = false;
+let lastScreenRender = Date.now();
+const RENDER_THROTTLE_MS = 100; // Minimum time between renders
+
 let appState: AppState = {
     tracks: {},
     stats: {
@@ -82,21 +91,50 @@ let appState: AppState = {
     }
 };
 
+// Check terminal size
+function checkTerminalSize() {
+    const minRows = 24;
+    const minCols = 80;
+    
+    if (process.stdout.rows < minRows || process.stdout.columns < minCols) {
+        console.warn(`\n⚠️  WARNING: Terminal size too small (${process.stdout.columns}x${process.stdout.rows})`);
+        console.warn(`   Recommended minimum: ${minCols}x${minRows}`);
+        console.warn(`   The UI may not display correctly.\n`);
+        return false;
+    }
+    return true;
+}
+
 // Initialize blessed screen
 const screen = blessed.screen({
     smartCSR: true,
     title: 'YouTube Music Downloader for Car Multimedia',
-    debug: true,
-    fullUnicode: true
+    debug: false, // Set to false for production
+    fullUnicode: true,
+    autoPadding: true,
+    forceUnicode: true,
+    fastCSR: true,
+    resizeTimeout: 300
 });
 
 // Initial render to ensure screen is working
 try {
+    checkTerminalSize();
     screen.render();
     console.log('Initial screen render successful');
 } catch (error) {
     console.error('Error during initial screen render:', error);
 }
+
+// Handle terminal resize
+screen.on('resize', () => {
+    checkTerminalSize();
+    try {
+        screen.render();
+    } catch (error) {
+        console.error('Error rendering after resize:', error);
+    }
+});
 
 // Create header
 const headerBox = blessed.box({
@@ -162,7 +200,9 @@ const logBox = blessed.log({
         border: {
             fg: 'cyan'
         }
-    }
+    },
+    // Limit the number of lines to prevent memory issues
+    scrollback: LOG_BUFFER_SIZE
 });
 
 // Create active downloads box
@@ -216,6 +256,37 @@ if (fs.existsSync(stateFile)) {
     }
 }
 
+// Safe render function
+function safeRender() {
+    try {
+        // Throttle renders to avoid overwhelming the terminal
+        const now = Date.now();
+        if (now - lastScreenRender >= RENDER_THROTTLE_MS) {
+            screen.render();
+            lastScreenRender = now;
+            uiNeedsUpdate = false;
+        } else {
+            // If we can't render now, mark for update later
+            uiNeedsUpdate = true;
+        }
+    } catch (error) {
+        console.error('Error rendering screen:', error);
+    }
+}
+
+// Set up periodic render for throttled updates
+setInterval(() => {
+    if (uiNeedsUpdate) {
+        try {
+            screen.render();
+            lastScreenRender = Date.now();
+            uiNeedsUpdate = false;
+        } catch (error) {
+            console.error('Error in periodic render:', error);
+        }
+    }
+}, RENDER_THROTTLE_MS);
+
 // UI update functions
 function updateStatus() {
     const { totalTracks, completedTracks, errorTracks } = appState.stats;
@@ -230,10 +301,11 @@ function updateStatus() {
     ].join(' | ');
     
     statusBox.setContent(statusContent);
-    screen.render();
+    safeRender();
 }
 
-function updateActiveDownloads(activeDownloads: Map<string, TrackInfo>) {
+// Throttled version of updateActiveDownloads to prevent too many renders
+const updateActiveDownloads = throttle((activeDownloads: Map<string, TrackInfo>) => {
     let content = chalk.cyan.bold('Active Downloads:\n');
     
     if (activeDownloads.size === 0) {
@@ -255,23 +327,40 @@ function updateActiveDownloads(activeDownloads: Map<string, TrackInfo>) {
     }
     
     activeBox.setContent(content);
-    screen.render();
-}
+    safeRender();
+}, RENDER_THROTTLE_MS);
 
-function log(message: string) {
-    const timestamp = new Date().toLocaleTimeString();
-    try {
-        // Log to UI
-        logBox.log(`${chalk.gray(`[${timestamp}]`)} ${message}`);
-        screen.render();
-        // Also log to console for debugging
-        console.log(`${timestamp} ${message}`);
-    } catch (error) {
-        // Fallback to console if UI fails
-        console.log(`${timestamp} ${message}`);
-        console.error('UI error:', error);
+// Throttled log function to prevent UI freezing with too many updates
+const log = (function() {
+    // The actual logging function
+    function logMessage(message: string) {
+        const timestamp = new Date().toLocaleTimeString();
+        const formattedMessage = `${chalk.gray(`[${timestamp}]`)} ${message}`;
+        
+        // Add to buffer for memory management
+        logBuffer.push(formattedMessage);
+        if (logBuffer.length > LOG_BUFFER_SIZE) {
+            logBuffer.shift(); // Remove oldest log entry
+        }
+        
+        try {
+            // Log to UI
+            logBox.log(formattedMessage);
+            // Also log to console for debugging
+            console.log(`${timestamp} ${message}`);
+            
+            // Request a render, but don't force it immediately
+            uiNeedsUpdate = true;
+        } catch (error) {
+            // Fallback to console if UI fails
+            console.log(`${timestamp} ${message}`);
+            console.error('UI error:', error);
+        }
     }
-}
+    
+    // Return the throttled version
+    return throttle(logMessage, RENDER_THROTTLE_MS / 2);
+})();
 
 function sanitizeFilename(filename: string): string {
     // More comprehensive sanitization for better file naming
@@ -681,9 +770,10 @@ async function main() {
         log(chalk.cyan.bold('🎵 YouTube Music Downloader for Car Multimedia 🚗'));
         log(chalk.gray('Press q or Ctrl+C to exit at any time'));
         
-        // Ensure screen is rendering
+        // Check terminal size and ensure screen is rendering
+        checkTerminalSize();
         try {
-            screen.render();
+            safeRender();
             console.log('Screen initialized and rendered');
         } catch (error) {
             console.error('Error rendering screen:', error);
@@ -775,7 +865,7 @@ async function main() {
 
         // Keep the screen open until user presses 'q'
         statusBox.setContent(chalk.green.bold('✅ Download complete! Press q to exit'));
-        screen.render();
+        safeRender();
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         log(chalk.red(`❌ Fatal error in main function: ${errorMessage}`));
@@ -839,8 +929,15 @@ function cleanupAndExit(exitCode = 0) {
         log(chalk.red(`❌ Error saving state: ${error}`));
     }
     
+    // Final render attempt
+    try {
+        screen.render();
+    } catch (error) {
+        console.error('Error during final render:', error);
+    }
+    
     // Force exit after a brief delay to allow final logs
-    setTimeout(() => process.exit(exitCode), 100);
+    setTimeout(() => process.exit(exitCode), 300);
 }
 
 // Fix for proper exit handling
