@@ -4,7 +4,8 @@ import * as path from 'path';
 import * as os from 'os';
 import blessed from 'blessed';
 import chalk from 'chalk';
-// p-limit is imported dynamically in the main function
+// Using require for p-limit since it's a CommonJS module in our setup
+const pLimit = require('p-limit');
 
 // Configuration
 const config = {
@@ -558,10 +559,10 @@ async function main() {
         // Set up parallel processing
         log(chalk.blue(`🚀 Starting download with ${config.concurrency} parallel processes`));
         
-        // Dynamically import p-limit (ESM module)
+        // Use p-limit for parallel processing
         try {
-            const pLimitModule = await import('p-limit');
-            const limit = pLimitModule.default(config.concurrency);
+            const pLimit = require('p-limit');
+            const limit = pLimit(config.concurrency);
             
             const promises = allTracks.map(url => limit(() => downloadTrack(url)));
 
