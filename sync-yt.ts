@@ -124,7 +124,15 @@ const config = {
 // Directory to save the downloaded music
 const downloadDirectory = path.join(__dirname, "/Downloaded");
 const stateFile = path.join(__dirname, "/sync_state.json");
-const fallbackFormat = 'bestvideo+bestaudio/best';
+const fallbackFormat = 'bestvideo+bestaudio/best[height<=1080]';
+// Additional yt-dlp parameters to help with signature extraction issues
+const ytdlpExtraParams = [
+    '--no-check-certificates',  // Skip HTTPS certificate validation
+    '--extractor-args', 'youtube:player_client=android',  // Try alternative player client
+    '--force-ipv4',  // Force IPv4 to avoid some CDN issues
+    '--geo-bypass',  // Bypass geo-restrictions
+    '--ignore-errors'  // Continue on download errors
+];
 
 interface TrackState {
     downloaded: boolean;
@@ -563,7 +571,13 @@ async function downloadTrack(url: string): Promise<void> {
         // Fetch metadata
         log(chalk.blue(`🔍 Fetching metadata for: ${url}`));
         try {
-            const metadataOutput = await execAsync('yt-dlp', ['--cookies-from-browser', 'vivaldi:Default', '-j', url]);
+            // Use enhanced parameters for metadata fetching too
+            const metadataOutput = await execAsync('yt-dlp', [
+                '--cookies-from-browser', 'vivaldi:Default', 
+                '-j', 
+                ...ytdlpExtraParams,
+                url
+            ]);
             const metadata = safeJsonParse(metadataOutput);
             const title = metadata.title;
             const duration = metadata.duration;
@@ -581,14 +595,22 @@ async function downloadTrack(url: string): Promise<void> {
 
             // Download video
             log(chalk.blue(`⬇️ Downloading: ${chalk.bold(title)}`));
-            const downloadProcess = spawn('yt-dlp', [
+            
+            // Build download command with extra parameters to handle signature issues
+            const downloadArgs = [
                 '-i', 
                 '--no-overwrites', 
                 '--cookies-from-browser', 'vivaldi:Default',
                 '-f', fallbackFormat, 
+                '--force-overwrites',  // Force overwrite if needed
+                '--no-playlist',  // Ensure we only download the single video
+                ...ytdlpExtraParams,  // Add our extra parameters for handling signature issues
                 '-o', outputPath, 
                 url
-            ], { stdio: 'pipe' });
+            ];
+            
+            log(chalk.gray(`Running yt-dlp with enhanced parameters to handle signature issues`));
+            const downloadProcess = spawn('yt-dlp', downloadArgs, { stdio: 'pipe' });
             
             activeProcesses.add(downloadProcess);
             trackInfo.process = downloadProcess;
@@ -806,7 +828,13 @@ async function downloadTrack(url: string): Promise<void> {
 async function getTracksFromPlaylist(url: string): Promise<string[]> {
     try {
         log(chalk.blue(`📋 Fetching playlist: ${url}`));
-        const output = await execAsync('yt-dlp', ['--cookies-from-browser', 'vivaldi:Default', '--flat-playlist', '-J', url]);
+        const output = await execAsync('yt-dlp', [
+            '--cookies-from-browser', 'vivaldi:Default', 
+            '--flat-playlist', 
+            '-J', 
+            ...ytdlpExtraParams,
+            url
+        ]);
         
         try {
             const playlistData = safeJsonParse(output);
@@ -850,6 +878,16 @@ async function checkRequirements(): Promise<boolean> {
         try {
             const ytdlpVersion = await execAsync('yt-dlp', ['--version']);
             log(chalk.green(`✓ yt-dlp is installed (version: ${ytdlpVersion.trim()})`));
+            
+            // Update yt-dlp to latest version to handle signature extraction issues
+            log(chalk.blue('🔄 Updating yt-dlp to latest version...'));
+            try {
+                const updateOutput = await execAsync('yt-dlp', ['--update-to', 'latest']);
+                log(chalk.green(`✓ yt-dlp update: ${updateOutput.trim()}`));
+            } catch (updateError) {
+                log(chalk.yellow(`⚠ Could not auto-update yt-dlp: ${updateError}`));
+                log(chalk.yellow('This is not critical, but using the latest version is recommended'));
+            }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             log(chalk.red(`❌ yt-dlp check failed: ${errorMessage}`));
