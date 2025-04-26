@@ -10,6 +10,38 @@ const pLimit = require('p-limit');
 // For throttling UI updates
 const throttle = require('lodash.throttle');
 
+// Throttled log function to prevent UI freezing with too many updates
+const log = (function() {
+    // The actual logging function
+    function logMessage(message: string) {
+        const timestamp = new Date().toLocaleTimeString();
+        const formattedMessage = `${chalk.gray(`[${timestamp}]`)} ${message}`;
+        
+        // Add to buffer for memory management
+        logBuffer.push(formattedMessage);
+        if (logBuffer.length > LOG_BUFFER_SIZE) {
+            logBuffer.shift(); // Remove oldest log entry
+        }
+        
+        try {
+            // Log to UI
+            logBox.log(formattedMessage);
+            // Also log to console for debugging
+            console.log(`${timestamp} ${message}`);
+            
+            // Request a render, but don't force it immediately
+            uiNeedsUpdate = true;
+        } catch (error) {
+            // Fallback to console if UI fails
+            console.log(`${timestamp} ${message}`);
+            console.error('UI error:', error);
+        }
+    }
+    
+    // Return the throttled version
+    return throttle(logMessage, RENDER_THROTTLE_MS / 2);
+})();
+
 // Configuration
 const config = {
     playlistUrls: [
@@ -333,37 +365,6 @@ const updateActiveDownloads = throttle((activeDownloads: Map<string, TrackInfo>)
     safeRender();
 }, RENDER_THROTTLE_MS);
 
-// Throttled log function to prevent UI freezing with too many updates
-const log = (function() {
-    // The actual logging function
-    function logMessage(message: string) {
-        const timestamp = new Date().toLocaleTimeString();
-        const formattedMessage = `${chalk.gray(`[${timestamp}]`)} ${message}`;
-        
-        // Add to buffer for memory management
-        logBuffer.push(formattedMessage);
-        if (logBuffer.length > LOG_BUFFER_SIZE) {
-            logBuffer.shift(); // Remove oldest log entry
-        }
-        
-        try {
-            // Log to UI
-            logBox.log(formattedMessage);
-            // Also log to console for debugging
-            console.log(`${timestamp} ${message}`);
-            
-            // Request a render, but don't force it immediately
-            uiNeedsUpdate = true;
-        } catch (error) {
-            // Fallback to console if UI fails
-            console.log(`${timestamp} ${message}`);
-            console.error('UI error:', error);
-        }
-    }
-    
-    // Return the throttled version
-    return throttle(logMessage, RENDER_THROTTLE_MS / 2);
-})();
 
 function sanitizeFilename(filename: string): string {
     // More comprehensive sanitization for better file naming
