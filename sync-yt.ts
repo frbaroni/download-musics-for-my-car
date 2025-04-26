@@ -2,9 +2,9 @@ import { execSync } from 'child_process';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
-import pLimit from 'p-limit';
 import blessed from 'blessed';
 import chalk from 'chalk';
+// p-limit is imported dynamically in the main function
 
 // Configuration
 const config = {
@@ -477,8 +477,11 @@ async function main() {
     updateStatus();
 
     // Set up parallel processing
-    const limit = pLimit(config.concurrency);
     log(chalk.blue(`🚀 Starting download with ${config.concurrency} parallel processes`));
+    
+    // Dynamically import p-limit (ESM module)
+    const pLimitModule = await import('p-limit');
+    const limit = pLimitModule.default(config.concurrency);
     
     const promises = allTracks.map(url => limit(() => downloadTrack(url)));
 
