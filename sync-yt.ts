@@ -563,7 +563,7 @@ async function downloadTrack(url: string): Promise<void> {
         // Fetch metadata
         log(chalk.blue(`🔍 Fetching metadata for: ${url}`));
         try {
-            const metadataOutput = await execAsync('yt-dlp', ['-j', url]);
+            const metadataOutput = await execAsync('yt-dlp', ['--cookies-from-browser', 'vivaldi:Default', '-j', url]);
             const metadata = safeJsonParse(metadataOutput);
             const title = metadata.title;
             const duration = metadata.duration;
@@ -584,6 +584,7 @@ async function downloadTrack(url: string): Promise<void> {
             const downloadProcess = spawn('yt-dlp', [
                 '-i', 
                 '--no-overwrites', 
+                '--cookies-from-browser', 'vivaldi:Default',
                 '-f', fallbackFormat, 
                 '-o', outputPath, 
                 url
@@ -805,7 +806,7 @@ async function downloadTrack(url: string): Promise<void> {
 async function getTracksFromPlaylist(url: string): Promise<string[]> {
     try {
         log(chalk.blue(`📋 Fetching playlist: ${url}`));
-        const output = await execAsync('yt-dlp', ['--flat-playlist', '-J', url]);
+        const output = await execAsync('yt-dlp', ['--cookies-from-browser', 'vivaldi:Default', '--flat-playlist', '-J', url]);
         
         try {
             const playlistData = safeJsonParse(output);
