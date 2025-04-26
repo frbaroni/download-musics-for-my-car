@@ -289,6 +289,7 @@ setInterval(() => {
     }
 }, RENDER_THROTTLE_MS);
 
+
 // UI update functions
 function updateStatus() {
     const { totalTracks, completedTracks, errorTracks } = appState.stats;
