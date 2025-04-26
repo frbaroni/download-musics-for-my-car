@@ -268,6 +268,17 @@ const activeBox = blessed.box({
     border: 'line',
     content: 'Active Downloads:',
     tags: true,
+    scrollable: true,
+    alwaysScroll: true,
+    scrollbar: {
+        ch: ' ',
+        track: {
+            bg: 'cyan'
+        },
+        style: {
+            inverse: true
+        }
+    },
     style: {
         border: {
             fg: 'cyan'
@@ -395,29 +406,63 @@ function updateStatus() {
 
 // Throttled version of updateActiveDownloads to prevent too many renders
 const updateActiveDownloads = throttle((activeDownloads: Map<string, TrackInfo>) => {
-    let content = chalk.cyan.bold('Active Downloads:\n');
+    // Clear the box first to prevent artifacts
+    activeBox.setContent('');
+    
+    // Add the header
+    activeBox.pushLine(chalk.cyan.bold('Active Downloads:'));
     
     if (activeDownloads.size === 0) {
-        content += '  No active downloads';
+        activeBox.pushLine('  No active downloads');
     } else {
+        // Define fixed widths for each column
+        const titleWidth = 40;
+        const statusWidth = 15;
+        const progressWidth = 10;
+        const sizeWidth = 15;
+        const speedWidth = 15;
+        const etaWidth = 12;
+        
         activeDownloads.forEach((info, url) => {
             const title = info.title || url;
-            const status = info.status === 'downloading' ? 
-                chalk.yellow('⬇️ Downloading') : 
-                info.status === 'transcoding' ? 
-                    chalk.blue('🔄 Transcoding') : 
-                    chalk.green('✓ ' + info.status);
+            const displayTitle = title.length > titleWidth 
+                ? title.substring(0, titleWidth - 3) + '...' 
+                : title.padEnd(titleWidth);
+                
+            // Format status with consistent width
+            let statusText = '';
+            if (info.status === 'downloading') {
+                statusText = chalk.yellow('⬇️ Downloading');
+            } else if (info.status === 'transcoding') {
+                statusText = chalk.blue('🔄 Transcoding');
+            } else {
+                statusText = chalk.green('✓ ' + info.status);
+            }
+            const status = statusText.padEnd(statusWidth);
             
-            const progress = info.progress ? `   ${info.progress.toFixed(1)}%` : '';
-            const eta = info.eta ? `   ETA: ${info.eta}` : '';
-            const speed = info.speed ? `   Speed: ${info.speed}` : '';
-            const size = info.size ? `   Size: ${info.size}` : '';
+            // Format other fields with consistent width
+            const progress = info.progress 
+                ? `${info.progress.toFixed(1)}%`.padEnd(progressWidth) 
+                : ''.padEnd(progressWidth);
+                
+            const size = info.size 
+                ? info.size.padEnd(sizeWidth) 
+                : ''.padEnd(sizeWidth);
+                
+            const speed = info.speed 
+                ? info.speed.padEnd(speedWidth) 
+                : ''.padEnd(speedWidth);
+                
+            const eta = info.eta 
+                ? `ETA: ${info.eta}`.padEnd(etaWidth) 
+                : ''.padEnd(etaWidth);
             
-            content += `  ${chalk.white(title.substring(0, 40))}${title.length > 40 ? '...' : ''} - ${status}${progress}${size}${speed}${eta}\n`;
+            // Combine all parts with proper spacing
+            const line = `  ${chalk.white(displayTitle)} ${status} ${progress} ${size} ${speed} ${eta}`;
+            activeBox.pushLine(line);
         });
     }
     
-    activeBox.setContent(content);
     safeRender();
 }, RENDER_THROTTLE_MS);
 
