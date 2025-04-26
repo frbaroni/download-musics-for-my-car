@@ -69,8 +69,18 @@ let errorTracks = 0;
 // Initialize blessed screen
 const screen = blessed.screen({
     smartCSR: true,
-    title: 'YouTube Music Downloader for Car Multimedia'
+    title: 'YouTube Music Downloader for Car Multimedia',
+    debug: true,
+    fullUnicode: true
 });
+
+// Initial render to ensure screen is working
+try {
+    screen.render();
+    console.log('Initial screen render successful');
+} catch (error) {
+    console.error('Error during initial screen render:', error);
+}
 
 // Create header
 const headerBox = blessed.box({
@@ -236,18 +246,26 @@ function updateActiveDownloads(activeDownloads: Map<string, TrackInfo>) {
 
 function log(message: string) {
     const timestamp = new Date().toLocaleTimeString();
-    logBox.log(`${chalk.gray(`[${timestamp}]`)} ${message}`);
-    screen.render();
+    try {
+        // Log to UI
+        logBox.log(`${chalk.gray(`[${timestamp}]`)} ${message}`);
+        screen.render();
+        // Also log to console for debugging
+        console.log(`${timestamp} ${message}`);
+    } catch (error) {
+        // Fallback to console if UI fails
+        console.log(`${timestamp} ${message}`);
+        console.error('UI error:', error);
+    }
 }
 
 function sanitizeFilename(filename: string): string {
     // More comprehensive sanitization for better file naming
     return filename
-        .replace(/[\\/:"*?<>|]+/g, '_') // Replace invalid file characters
-        .replace(/\s+/g, '_')           // Replace spaces with underscores
-        .replace(/__+/g, '_')           // Replace multiple underscores with single
-        .replace(/^_|_$/g, '')          // Remove leading/trailing underscores
-        .toLowerCase()
+        .replace(/[\\/:"*?<>|]+/g, '-') // Replace invalid file characters with hyphens
+        // Keep spaces instead of replacing with underscores
+        .replace(/--+/g, '-')           // Replace multiple hyphens with single
+        .replace(/^-|-$/g, '')          // Remove leading/trailing hyphens
         .substring(0, 100);             // Limit filename length
 }
 
@@ -501,9 +519,19 @@ ${chalk.yellow('Files:')}
 
 async function main() {
     try {
+        console.log('Application starting...');  // Direct console output for debugging
+        
         // Display welcome message
         log(chalk.cyan.bold('🎵 YouTube Music Downloader for Car Multimedia 🚗'));
         log(chalk.gray('Press q or Ctrl+C to exit at any time'));
+        
+        // Ensure screen is rendering
+        try {
+            screen.render();
+            console.log('Screen initialized and rendered');
+        } catch (error) {
+            console.error('Error rendering screen:', error);
+        }
         
         // Check requirements
         if (!checkRequirements()) {
