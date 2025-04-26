@@ -13,7 +13,8 @@ let throttle: Function;
 try {
     throttle = require('lodash.throttle');
 } catch (error) {
-    console.error('Error loading lodash.throttle: ', error.message);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Error loading lodash.throttle: ', errorMessage);
     console.error('Please install it using: yarn add lodash.throttle');
     console.error('Falling back to a simple throttle implementation');
     
