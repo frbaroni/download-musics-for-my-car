@@ -244,7 +244,7 @@ const activeBox = blessed.box({
     top: 6,
     left: 0,
     width: '100%',
-    height: 5,
+    height: 10, // Increase height to show more active downloads
     border: 'line',
     content: 'Active Downloads:',
     tags: true,
@@ -258,7 +258,7 @@ const activeBox = blessed.box({
 // Create status box
 const statusBox = blessed.box({
     parent: screen,
-    top: 11,
+    top: 16, // Adjust top position based on new activeBox height
     left: 0,
     width: '100%',
     height: 3,
@@ -274,7 +274,7 @@ const statusBox = blessed.box({
 // Create log box
 const logBox = blessed.log({
     parent: screen,
-    top: 14,
+    top: 19, // Adjust top position based on new statusBox position
     bottom: 0,
     left: 0,
     width: '100%',
