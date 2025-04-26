@@ -10,6 +10,7 @@ const pLimit = require('p-limit');
 // For throttling UI updates
 const throttle = require('lodash.throttle');
 
+
 // Throttled log function to prevent UI freezing with too many updates
 const log = (function() {
     // The actual logging function
