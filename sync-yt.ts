@@ -281,63 +281,78 @@ async function downloadTrack(url: string): Promise<void> {
 
         // Fetch metadata
         log(chalk.blue(`🔍 Fetching metadata for: ${url}`));
-        const metadata = JSON.parse(execSync(`yt-dlp -j ${url}`, { encoding: 'utf-8' }));
-        const title = metadata.title;
-        const duration = metadata.duration;
-        const sanitizedTitle = sanitizeFilename(title);
-        const outputPath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
-        
-        // Update active downloads with title
-        activeDownloads.set(url, { 
-            url, 
-            title, 
-            status: 'downloading' 
-        });
-        updateActiveDownloads(activeDownloads);
+        try {
+            const metadata = JSON.parse(execSync(`yt-dlp -j ${url}`, { encoding: 'utf-8' }));
+            const title = metadata.title;
+            const duration = metadata.duration;
+            const sanitizedTitle = sanitizeFilename(title);
+            const outputPath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
+            
+            // Update active downloads with title
+            activeDownloads.set(url, { 
+                url, 
+                title, 
+                status: 'downloading' 
+            });
+            updateActiveDownloads(activeDownloads);
 
-        // Download video
-        log(chalk.blue(`⬇️ Downloading: ${chalk.bold(title)}`));
-        execSync(`yt-dlp -i --no-overwrites -f "${fallbackFormat}" -o "${outputPath}" ${url}`, { 
-            stdio: 'pipe' 
-        });
+            // Download video
+            log(chalk.blue(`⬇️ Downloading: ${chalk.bold(title)}`));
+            execSync(`yt-dlp -i --no-overwrites -f "${fallbackFormat}" -o "${outputPath}" ${url}`, { 
+                stdio: 'pipe' 
+            });
 
-        // Update status to transcoding
-        activeDownloads.set(url, { 
-            url, 
-            title, 
-            status: 'transcoding' 
-        });
-        updateActiveDownloads(activeDownloads);
+            // Update status to transcoding
+            activeDownloads.set(url, { 
+                url, 
+                title, 
+                status: 'transcoding' 
+            });
+            updateActiveDownloads(activeDownloads);
 
-        // Transcode for car multimedia compatibility
-        log(chalk.magenta(`🔄 Transcoding: ${chalk.bold(title)}`));
-        const tempOutput = path.join(downloadDirectory, `${sanitizedTitle}_temp.mp4`);
-        
-        const { codec, profile, level, resolution, maxRate, bufSize, audioCodec, audioBitrate } = config.videoFormat;
-        
-        execSync(
-            `ffmpeg -y -i "${outputPath}" -c:v ${codec} -profile:v ${profile} -level ${level} ` +
-            `-maxrate ${maxRate} -bufsize ${bufSize} -vf "scale=${resolution}" ` +
-            `-c:a ${audioCodec} -b:a ${audioBitrate} "${tempOutput}"`, 
-            { stdio: 'pipe' }
-        );
+            // Transcode for car multimedia compatibility
+            log(chalk.magenta(`🔄 Transcoding: ${chalk.bold(title)}`));
+            const tempOutput = path.join(downloadDirectory, `${sanitizedTitle}_temp.mp4`);
+            
+            const { codec, profile, level, resolution, maxRate, bufSize, audioCodec, audioBitrate } = config.videoFormat;
+            
+            execSync(
+                `ffmpeg -y -i "${outputPath}" -c:v ${codec} -profile:v ${profile} -level ${level} ` +
+                `-maxrate ${maxRate} -bufsize ${bufSize} -vf "scale=${resolution}" ` +
+                `-c:a ${audioCodec} -b:a ${audioBitrate} "${tempOutput}"`, 
+                { stdio: 'pipe' }
+            );
 
-        // Replace original with transcoded version
-        fs.removeSync(outputPath);
-        fs.renameSync(tempOutput, outputPath);
+            // Replace original with transcoded version
+            fs.removeSync(outputPath);
+            fs.renameSync(tempOutput, outputPath);
 
-        // Update cache
-        cache[url] = {
-            downloaded: true,
-            title: title,
-            lastAttempt: new Date().toISOString()
-        };
-        fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
+            // Update cache
+            cache[url] = {
+                downloaded: true,
+                title: title,
+                lastAttempt: new Date().toISOString()
+            };
+            fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
 
-        // Update counters and UI
-        completedTracks++;
-        updateStatus();
-        log(chalk.green(`✓ Completed: ${chalk.bold(title)}`));
+            // Update counters and UI
+            completedTracks++;
+            updateStatus();
+            log(chalk.green(`✓ Completed: ${chalk.bold(title)}`));
+        } catch (innerError) {
+            const innerErrorMsg = innerError instanceof Error ? innerError.message : String(innerError);
+            log(chalk.red(`❌ Error processing ${url}: ${innerErrorMsg}`));
+            
+            // If the error is from execSync, log stdout/stderr
+            if (innerError && (innerError as any).stdout) {
+                log(chalk.yellow(`Command output: ${(innerError as any).stdout.toString()}`));
+            }
+            if (innerError && (innerError as any).stderr) {
+                log(chalk.yellow(`Command error output: ${(innerError as any).stderr.toString()}`));
+            }
+            
+            throw innerError; // Re-throw to be caught by outer catch
+        }
         
         // Remove from active downloads
         activeDownloads.delete(url);
@@ -345,6 +360,10 @@ async function downloadTrack(url: string): Promise<void> {
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         log(chalk.red(`❌ Error downloading ${url}: ${errorMessage}`));
+        
+        if (error instanceof Error && error.stack) {
+            log(chalk.red(`Stack trace for ${url.substring(0, 30)}...: ${error.stack.split('\n')[0]}`));
+        }
         
         // Update error cache
         cache[url] = {
@@ -376,13 +395,36 @@ async function getTracksFromPlaylist(url: string): Promise<string[]> {
     try {
         log(chalk.blue(`📋 Fetching playlist: ${url}`));
         const output = execSync(`yt-dlp --flat-playlist -J ${url}`, { encoding: 'utf-8' });
-        const playlistData = JSON.parse(output);
-        const tracks = playlistData.entries.map((entry: any) => `https://youtube.com/watch?v=${entry.id}`);
-        log(chalk.green(`✓ Found ${tracks.length} tracks in playlist`));
-        return tracks;
+        
+        try {
+            const playlistData = JSON.parse(output);
+            if (!playlistData.entries || !Array.isArray(playlistData.entries)) {
+                log(chalk.yellow(`⚠ Playlist data doesn't contain entries array: ${url}`));
+                log(chalk.yellow(`Output: ${output.substring(0, 200)}...`));
+                return [];
+            }
+            
+            const tracks = playlistData.entries.map((entry: any) => `https://youtube.com/watch?v=${entry.id}`);
+            log(chalk.green(`✓ Found ${tracks.length} tracks in playlist`));
+            return tracks;
+        } catch (parseError) {
+            log(chalk.red(`❌ Failed to parse playlist JSON: ${parseError}`));
+            log(chalk.yellow(`Raw output (first 200 chars): ${output.substring(0, 200)}...`));
+            throw new Error(`JSON parse error: ${parseError.message}`);
+        }
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        log(chalk.red(`❌ Failed to fetch playlist: ${url}\nError: ${errorMessage}`));
+        log(chalk.red(`❌ Failed to fetch playlist: ${url}`));
+        log(chalk.red(`Error: ${errorMessage}`));
+        
+        // If the error is from execSync, it might have stdout/stderr
+        if (error && (error as any).stdout) {
+            log(chalk.yellow(`Command output: ${(error as any).stdout.toString()}`));
+        }
+        if (error && (error as any).stderr) {
+            log(chalk.yellow(`Command error output: ${(error as any).stderr.toString()}`));
+        }
+        
         return [];
     }
 }
@@ -393,18 +435,35 @@ function checkRequirements(): boolean {
         log(chalk.blue('🔍 Checking requirements...'));
         
         // Check yt-dlp
-        execSync('yt-dlp --version', { stdio: 'pipe' });
-        log(chalk.green('✓ yt-dlp is installed'));
+        try {
+            const ytdlpVersion = execSync('yt-dlp --version', { stdio: 'pipe', encoding: 'utf8' }).trim();
+            log(chalk.green(`✓ yt-dlp is installed (version: ${ytdlpVersion})`));
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            log(chalk.red(`❌ yt-dlp check failed: ${errorMessage}`));
+            log(chalk.yellow('⚠ Please install yt-dlp: https://github.com/yt-dlp/yt-dlp#installation'));
+            return false;
+        }
         
         // Check ffmpeg
-        execSync('ffmpeg -version', { stdio: 'pipe' });
-        log(chalk.green('✓ ffmpeg is installed'));
+        try {
+            const ffmpegVersion = execSync('ffmpeg -version', { stdio: 'pipe', encoding: 'utf8' }).split('\n')[0];
+            log(chalk.green(`✓ ffmpeg is installed (${ffmpegVersion})`));
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            log(chalk.red(`❌ ffmpeg check failed: ${errorMessage}`));
+            log(chalk.yellow('⚠ Please install ffmpeg: https://ffmpeg.org/download.html'));
+            return false;
+        }
         
         return true;
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        log(chalk.red(`❌ Missing requirements: ${errorMessage}`));
-        log(chalk.yellow('⚠ Please install yt-dlp and ffmpeg to use this tool'));
+        log(chalk.red(`❌ Requirements check failed with unexpected error: ${errorMessage}`));
+        if (error instanceof Error && error.stack) {
+            log(chalk.red(`Stack trace: ${error.stack}`));
+        }
+        log(chalk.yellow('⚠ Please ensure yt-dlp and ffmpeg are properly installed and accessible in your PATH'));
         return false;
     }
 }
@@ -440,83 +499,150 @@ ${chalk.yellow('Files:')}
 }
 
 async function main() {
-    // Display welcome message
-    log(chalk.cyan.bold('🎵 YouTube Music Downloader for Car Multimedia 🚗'));
-    log(chalk.gray('Press q or Ctrl+C to exit at any time'));
-    
-    // Check requirements
-    if (!checkRequirements()) {
-        screen.key(['q', 'C-c'], () => process.exit(1));
-        return;
+    try {
+        // Display welcome message
+        log(chalk.cyan.bold('🎵 YouTube Music Downloader for Car Multimedia 🚗'));
+        log(chalk.gray('Press q or Ctrl+C to exit at any time'));
+        
+        // Check requirements
+        if (!checkRequirements()) {
+            log(chalk.red('❌ Exiting due to missing requirements'));
+            screen.key(['q', 'C-c'], () => process.exit(1));
+            return;
+        }
+        
+        // Create download directory if it doesn't exist
+        try {
+            fs.ensureDirSync(downloadDirectory);
+            log(chalk.green(`✓ Download directory ready: ${downloadDirectory}`));
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            log(chalk.red(`❌ Failed to create download directory: ${errorMessage}`));
+            log(chalk.red(`Path: ${downloadDirectory}`));
+            process.exit(1);
+        }
+
+        // Display help
+        displayHelp();
+        
+        // Get all tracks
+        log(chalk.blue('📋 Gathering tracks from playlists and videos...'));
+        const allTracks: string[] = [];
+        
+        // Process playlists
+        for (const playlistUrl of config.playlistUrls) {
+            try {
+                const trackUrls = await getTracksFromPlaylist(playlistUrl);
+                allTracks.push(...trackUrls);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                log(chalk.red(`❌ Failed to process playlist ${playlistUrl}: ${errorMessage}`));
+                // Continue with other playlists instead of failing completely
+            }
+        }
+        
+        // Add individual videos
+        allTracks.push(...config.videoUrls);
+        totalTracks = allTracks.length;
+        
+        if (totalTracks === 0) {
+            log(chalk.red('❌ No tracks found to download. Check your playlist and video URLs.'));
+            process.exit(1);
+        }
+        
+        log(chalk.green(`✓ Found ${totalTracks} total tracks to process`));
+
+        // Initialize progress
+        updateStatus();
+
+        // Set up parallel processing
+        log(chalk.blue(`🚀 Starting download with ${config.concurrency} parallel processes`));
+        
+        // Dynamically import p-limit (ESM module)
+        try {
+            const pLimitModule = await import('p-limit');
+            const limit = pLimitModule.default(config.concurrency);
+            
+            const promises = allTracks.map(url => limit(() => downloadTrack(url)));
+
+            // Wait for all downloads to complete
+            await Promise.all(promises);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            log(chalk.red(`❌ Error during parallel processing: ${errorMessage}`));
+            if (error instanceof Error && error.stack) {
+                log(chalk.red(`Stack trace: ${error.stack}`));
+            }
+            throw error; // Re-throw to be caught by the outer catch
+        }
+
+        // Final status
+        log(chalk.green.bold('\n✅ Download complete!'));
+        log(chalk.cyan(`📊 Summary:`));
+        log(chalk.white(`  Total tracks: ${totalTracks}`));
+        log(chalk.green(`  Completed: ${completedTracks}`));
+        log(chalk.red(`  Errors: ${errorTracks}`));
+        log(chalk.yellow(`  Remaining: ${totalTracks - completedTracks - errorTracks}`));
+
+        if (errorTracks > 0) {
+            log(chalk.yellow(`⚠ Some tracks had errors. Check ${errorsFile} for details.`));
+        }
+
+        // Keep the screen open until user presses 'q'
+        statusBox.setContent(chalk.green.bold('✅ Download complete! Press q to exit'));
+        screen.render();
+        screen.key(['q', 'C-c'], () => process.exit(0));
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        log(chalk.red(`❌ Fatal error in main function: ${errorMessage}`));
+        if (error instanceof Error && error.stack) {
+            log(chalk.red(`Stack trace: ${error.stack}`));
+        }
+        
+        // Save current state
+        try {
+            fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
+            fs.writeJsonSync(errorsFile, errors, { spaces: 2 });
+            log(chalk.yellow('✓ Saved current progress to cache files'));
+        } catch (saveError) {
+            log(chalk.red(`❌ Failed to save progress: ${saveError}`));
+        }
+        
+        process.exit(1);
     }
-    
-    // Create download directory if it doesn't exist
-    fs.ensureDirSync(downloadDirectory);
-    log(chalk.green(`✓ Download directory ready: ${downloadDirectory}`));
-
-    // Display help
-    displayHelp();
-    
-    // Get all tracks
-    log(chalk.blue('📋 Gathering tracks from playlists and videos...'));
-    const allTracks: string[] = [];
-    
-    // Process playlists
-    for (const playlistUrl of config.playlistUrls) {
-        const trackUrls = await getTracksFromPlaylist(playlistUrl);
-        allTracks.push(...trackUrls);
-    }
-    
-    // Add individual videos
-    allTracks.push(...config.videoUrls);
-    totalTracks = allTracks.length;
-    
-    log(chalk.green(`✓ Found ${totalTracks} total tracks to process`));
-
-    // Initialize progress
-    updateStatus();
-
-    // Set up parallel processing
-    log(chalk.blue(`🚀 Starting download with ${config.concurrency} parallel processes`));
-    
-    // Dynamically import p-limit (ESM module)
-    const pLimitModule = await import('p-limit');
-    const limit = pLimitModule.default(config.concurrency);
-    
-    const promises = allTracks.map(url => limit(() => downloadTrack(url)));
-
-    // Wait for all downloads to complete
-    await Promise.all(promises);
-
-    // Final status
-    log(chalk.green.bold('\n✅ Download complete!'));
-    log(chalk.cyan(`📊 Summary:`));
-    log(chalk.white(`  Total tracks: ${totalTracks}`));
-    log(chalk.green(`  Completed: ${completedTracks}`));
-    log(chalk.red(`  Errors: ${errorTracks}`));
-    log(chalk.yellow(`  Remaining: ${totalTracks - completedTracks - errorTracks}`));
-
-    if (errorTracks > 0) {
-        log(chalk.yellow(`⚠ Some tracks had errors. Check ${errorsFile} for details.`));
-    }
-
-    // Keep the screen open until user presses 'q'
-    statusBox.setContent(chalk.green.bold('✅ Download complete! Press q to exit'));
-    screen.render();
-    screen.key(['q', 'C-c'], () => process.exit(0));
 }
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-    log(chalk.red(`❌ Fatal error: ${error.message}`));
-    log(chalk.red(error.stack || ''));
+    log(chalk.red(`❌ FATAL UNCAUGHT EXCEPTION: ${error.message}`));
+    log(chalk.red(`Stack trace: ${error.stack || 'No stack trace available'}`));
+    log(chalk.yellow('Process will exit after saving current state'));
     
     // Save current state
-    fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
-    fs.writeJsonSync(errorsFile, errors, { spaces: 2 });
+    try {
+        fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
+        fs.writeJsonSync(errorsFile, errors, { spaces: 2 });
+        log(chalk.yellow('✓ Saved current progress to cache files'));
+    } catch (saveError) {
+        log(chalk.red(`❌ Failed to save progress during crash: ${saveError}`));
+    }
     
     // Exit after a delay to allow logs to be written
-    setTimeout(() => process.exit(1), 1000);
+    setTimeout(() => {
+        log(chalk.red('Exiting due to fatal error'));
+        process.exit(1);
+    }, 1000);
+});
+
+// Also add a handler for unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+    log(chalk.red(`❌ UNHANDLED PROMISE REJECTION: ${reason}`));
+    if (reason instanceof Error) {
+        log(chalk.red(`Stack trace: ${reason.stack || 'No stack trace available'}`));
+    }
+    log(chalk.yellow('This is a bug in the application that should be fixed'));
+    
+    // We don't exit here, but log it for debugging
 });
 
 // Start the application
