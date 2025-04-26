@@ -239,6 +239,7 @@ const statusBox = blessed.box({
 });
 
 
+
 // Load state from file
 if (fs.existsSync(stateFile)) {
     try {
