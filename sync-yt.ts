@@ -39,6 +39,9 @@ let uiNeedsUpdate = false;
 let lastScreenRender = Date.now();
 
 
+// Debug flag for console logging
+const DEBUG = false;
+
 // Throttled log function to prevent UI freezing with too many updates
 const log = (function() {
     // The actual logging function
@@ -55,14 +58,16 @@ const log = (function() {
         try {
             // Log to UI - use pushLine instead of log to ensure proper containment
             logBox.pushLine(formattedMessage);
-            // Also log to console for debugging
-            console.log(`${timestamp} ${message}`);
+            // Only log to console if debugging is enabled
+            if (DEBUG) {
+                console.log(`${timestamp} ${message}`);
+            }
             
             // Request a render, but don't force it immediately
             uiNeedsUpdate = true;
         } catch (error) {
             // Fallback to console if UI fails
-            console.log(`${timestamp} ${message}`);
+            console.error(`${timestamp} ${message}`);
             console.error('UI error:', error);
         }
     }
@@ -233,11 +238,44 @@ const progressBar = blessed.progressbar({
     filled: 0
 });
 
+// Create active downloads box
+const activeBox = blessed.box({
+    parent: screen,
+    top: 6,
+    left: 0,
+    width: '100%',
+    height: 5,
+    border: 'line',
+    content: 'Active Downloads:',
+    tags: true,
+    style: {
+        border: {
+            fg: 'cyan'
+        }
+    }
+});
+
+// Create status box
+const statusBox = blessed.box({
+    parent: screen,
+    top: 11,
+    left: 0,
+    width: '100%',
+    height: 3,
+    border: 'line',
+    content: 'Ready to start...',
+    style: {
+        border: {
+            fg: 'cyan'
+        }
+    }
+});
+
 // Create log box
 const logBox = blessed.log({
     parent: screen,
-    top: 6,
-    bottom: 8, // Set bottom position to leave space for active downloads and status
+    top: 14,
+    bottom: 0,
     left: 0,
     width: '100%',
     height: 'shrink', // Use shrink to fit between top and bottom
@@ -264,39 +302,6 @@ const logBox = blessed.log({
     },
     // Limit the number of lines to prevent memory issues
     scrollback: LOG_BUFFER_SIZE
-});
-
-// Create active downloads box
-const activeBox = blessed.box({
-    parent: screen,
-    bottom: 3,
-    left: 0,
-    width: '100%',
-    height: 5,
-    border: 'line',
-    content: 'Active Downloads:',
-    tags: true,
-    style: {
-        border: {
-            fg: 'cyan'
-        }
-    }
-});
-
-// Create status box
-const statusBox = blessed.box({
-    parent: screen,
-    bottom: 0,
-    left: 0,
-    width: '100%',
-    height: 3,
-    border: 'line',
-    content: 'Ready to start...',
-    style: {
-        border: {
-            fg: 'cyan'
-        }
-    }
 });
 
 
