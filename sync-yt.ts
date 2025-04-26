@@ -35,18 +35,26 @@ const config = {
 
 // Directory to save the downloaded music
 const downloadDirectory = path.join(__dirname, "/Downloaded");
-const cacheFile = path.join(__dirname, "/downloaded_tracks.json");
-const errorsFile = path.join(__dirname, "/errors.json");
+const stateFile = path.join(__dirname, "/sync_state.json");
 const fallbackFormat = 'bestvideo+bestaudio/best';
 
-interface Cache {
-    [key: string]: {
-        downloaded: boolean;
-        title?: string;
-        error?: string;
-        retries?: number;
-        lastAttempt?: string;
-        timestamp?: string;
+interface TrackState {
+    downloaded: boolean;
+    title?: string;
+    error?: string;
+    retries?: number;
+    lastAttempt?: string;
+    timestamp?: string;
+}
+
+interface AppState {
+    tracks: {
+        [url: string]: TrackState;
+    };
+    stats: {
+        totalTracks: number;
+        completedTracks: number;
+        errorTracks: number;
     };
 }
 
@@ -60,11 +68,14 @@ interface TrackInfo {
     eta?: string;
 }
 
-let cache: Cache = {};
-let errors: Cache = {};
-let totalTracks = 0;
-let completedTracks = 0;
-let errorTracks = 0;
+let appState: AppState = {
+    tracks: {},
+    stats: {
+        totalTracks: 0,
+        completedTracks: 0,
+        errorTracks: 0
+    }
+};
 
 // Initialize blessed screen
 const screen = blessed.screen({
@@ -182,29 +193,27 @@ const statusBox = blessed.box({
     }
 });
 
-// Load cache and errors
-if (fs.existsSync(cacheFile)) {
+// Load state from file
+if (fs.existsSync(stateFile)) {
     try {
-        cache = fs.readJsonSync(cacheFile);
-        log(chalk.green(`✓ Loaded cache with ${Object.keys(cache).length} entries`));
+        appState = fs.readJsonSync(stateFile);
+        log(chalk.green(`✓ Loaded state with ${Object.keys(appState.tracks).length} track entries`));
     } catch (error) {
-        log(chalk.red(`Error loading cache: ${error}`));
-        cache = {};
-    }
-}
-
-if (fs.existsSync(errorsFile)) {
-    try {
-        errors = fs.readJsonSync(errorsFile);
-        log(chalk.yellow(`⚠ Loaded error log with ${Object.keys(errors).length} entries`));
-    } catch (error) {
-        log(chalk.red(`Error loading error log: ${error}`));
-        errors = {};
+        log(chalk.red(`Error loading state file: ${error}`));
+        appState = {
+            tracks: {},
+            stats: {
+                totalTracks: 0,
+                completedTracks: 0,
+                errorTracks: 0
+            }
+        };
     }
 }
 
 // UI update functions
 function updateStatus() {
+    const { totalTracks, completedTracks, errorTracks } = appState.stats;
     const progress = totalTracks > 0 ? (completedTracks / totalTracks) * 100 : 0;
     progressBar.setProgress(progress);
     
@@ -274,17 +283,17 @@ const activeDownloads = new Map<string, TrackInfo>();
 
 async function downloadTrack(url: string): Promise<void> {
     // Skip if already downloaded successfully
-    if (cache[url]?.downloaded) {
+    if (appState.tracks[url]?.downloaded) {
         log(chalk.gray(`Skipping already downloaded track: ${url}`));
-        completedTracks++;
+        appState.stats.completedTracks++;
         updateStatus();
         return;
     }
 
     // Skip if too many retries
-    if (cache[url]?.retries && cache[url].retries >= config.maxRetries) {
+    if (appState.tracks[url]?.retries && appState.tracks[url].retries >= config.maxRetries) {
         log(chalk.yellow(`⚠ Skipping track with too many retries: ${url}`));
-        errorTracks++;
+        appState.stats.errorTracks++;
         updateStatus();
         return;
     }
@@ -346,16 +355,16 @@ async function downloadTrack(url: string): Promise<void> {
             fs.removeSync(outputPath);
             fs.renameSync(tempOutput, outputPath);
 
-            // Update cache
-            cache[url] = {
+            // Update state
+            appState.tracks[url] = {
                 downloaded: true,
                 title: title,
                 lastAttempt: new Date().toISOString()
             };
-            fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
+            fs.writeJsonSync(stateFile, appState, { spaces: 2 });
 
             // Update counters and UI
-            completedTracks++;
+            appState.stats.completedTracks++;
             updateStatus();
             log(chalk.green(`✓ Completed: ${chalk.bold(title)}`));
         } catch (innerError) {
@@ -384,24 +393,18 @@ async function downloadTrack(url: string): Promise<void> {
             log(chalk.red(`Stack trace for ${url.substring(0, 30)}...: ${error.stack.split('\n')[0]}`));
         }
         
-        // Update error cache
-        cache[url] = {
+        // Update state with error
+        appState.tracks[url] = {
             downloaded: false,
             error: errorMessage,
-            retries: (cache[url]?.retries || 0) + 1,
-            lastAttempt: new Date().toISOString()
-        };
-        fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
-        
-        // Update error log
-        errors[url] = {
-            ...cache[url],
+            retries: (appState.tracks[url]?.retries || 0) + 1,
+            lastAttempt: new Date().toISOString(),
             timestamp: new Date().toISOString()
         };
-        fs.writeJsonSync(errorsFile, errors, { spaces: 2 });
+        fs.writeJsonSync(stateFile, appState, { spaces: 2 });
         
         // Update counters and UI
-        errorTracks++;
+        appState.stats.errorTracks++;
         updateStatus();
         
         // Remove from active downloads
@@ -572,14 +575,14 @@ async function main() {
         
         // Add individual videos
         allTracks.push(...config.videoUrls);
-        totalTracks = allTracks.length;
+        appState.stats.totalTracks = allTracks.length;
         
-        if (totalTracks === 0) {
+        if (appState.stats.totalTracks === 0) {
             log(chalk.red('❌ No tracks found to download. Check your playlist and video URLs.'));
             process.exit(1);
         }
         
-        log(chalk.green(`✓ Found ${totalTracks} total tracks to process`));
+        log(chalk.green(`✓ Found ${appState.stats.totalTracks} total tracks to process`));
 
         // Initialize progress
         updateStatus();
@@ -608,19 +611,18 @@ async function main() {
         // Final status
         log(chalk.green.bold('\n✅ Download complete!'));
         log(chalk.cyan(`📊 Summary:`));
-        log(chalk.white(`  Total tracks: ${totalTracks}`));
-        log(chalk.green(`  Completed: ${completedTracks}`));
-        log(chalk.red(`  Errors: ${errorTracks}`));
-        log(chalk.yellow(`  Remaining: ${totalTracks - completedTracks - errorTracks}`));
+        log(chalk.white(`  Total tracks: ${appState.stats.totalTracks}`));
+        log(chalk.green(`  Completed: ${appState.stats.completedTracks}`));
+        log(chalk.red(`  Errors: ${appState.stats.errorTracks}`));
+        log(chalk.yellow(`  Remaining: ${appState.stats.totalTracks - appState.stats.completedTracks - appState.stats.errorTracks}`));
 
-        if (errorTracks > 0) {
-            log(chalk.yellow(`⚠ Some tracks had errors. Check ${errorsFile} for details.`));
+        if (appState.stats.errorTracks > 0) {
+            log(chalk.yellow(`⚠ Some tracks had errors. Check the state file for details: ${stateFile}`));
         }
 
         // Keep the screen open until user presses 'q'
         statusBox.setContent(chalk.green.bold('✅ Download complete! Press q to exit'));
         screen.render();
-        screen.key(['q', 'C-c'], () => process.exit(0));
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         log(chalk.red(`❌ Fatal error in main function: ${errorMessage}`));
@@ -630,9 +632,8 @@ async function main() {
         
         // Save current state
         try {
-            fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
-            fs.writeJsonSync(errorsFile, errors, { spaces: 2 });
-            log(chalk.yellow('✓ Saved current progress to cache files'));
+            fs.writeJsonSync(stateFile, appState, { spaces: 2 });
+            log(chalk.yellow('✓ Saved current progress to state file'));
         } catch (saveError) {
             log(chalk.red(`❌ Failed to save progress: ${saveError}`));
         }
@@ -649,18 +650,14 @@ process.on('uncaughtException', (error) => {
     
     // Save current state
     try {
-        fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
-        fs.writeJsonSync(errorsFile, errors, { spaces: 2 });
-        log(chalk.yellow('✓ Saved current progress to cache files'));
+        fs.writeJsonSync(stateFile, appState, { spaces: 2 });
+        log(chalk.yellow('✓ Saved current progress to state file'));
     } catch (saveError) {
         log(chalk.red(`❌ Failed to save progress during crash: ${saveError}`));
     }
     
-    // Exit after a delay to allow logs to be written
-    setTimeout(() => {
-        log(chalk.red('Exiting due to fatal error'));
-        process.exit(1);
-    }, 1000);
+    // Exit immediately
+    process.exit(1);
 });
 
 // Also add a handler for unhandled promise rejections
@@ -672,6 +669,20 @@ process.on('unhandledRejection', (reason, promise) => {
     log(chalk.yellow('This is a bug in the application that should be fixed'));
     
     // We don't exit here, but log it for debugging
+});
+
+// Fix for proper exit handling
+screen.key(['q', 'C-c', 'C-d'], () => {
+    log(chalk.yellow('Exiting application...'));
+    // Save state before exit
+    try {
+        fs.writeJsonSync(stateFile, appState, { spaces: 2 });
+        log(chalk.green('✓ State saved successfully'));
+    } catch (error) {
+        log(chalk.red(`❌ Error saving state: ${error}`));
+    }
+    // Force exit after a brief delay to allow final logs
+    setTimeout(() => process.exit(0), 100);
 });
 
 // Start the application
