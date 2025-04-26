@@ -410,7 +410,7 @@ async function getTracksFromPlaylist(url: string): Promise<string[]> {
         } catch (parseError) {
             log(chalk.red(`❌ Failed to parse playlist JSON: ${parseError}`));
             log(chalk.yellow(`Raw output (first 200 chars): ${output.substring(0, 200)}...`));
-            throw new Error(`JSON parse error: ${parseError.message}`);
+            throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
         }
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
