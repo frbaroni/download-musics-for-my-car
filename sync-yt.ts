@@ -9,7 +9,7 @@ import chalk from 'chalk';
 // Configuration
 const config = {
     playlistUrls: [
-        'https://music.youtube.com/playlist?list=PL6YVnWd7IiQVHepsVJGTO7hodBqMeRg2t', // Topz
+        'https://youtube.com/playlist?list=PL6YVnWd7IiQVHepsVJGTO7hodBqMeRg2t', // Topz
     ],
     videoUrls: [
         'https://youtube.com/watch?v=KtPGD9nakhk', // Sander van Doorn - Purple Haze - Natural One 2019
