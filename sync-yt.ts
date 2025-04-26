@@ -4,7 +4,6 @@ import * as path from 'path';
 import * as os from 'os';
 import pLimit from 'p-limit';
 import blessed from 'blessed';
-import { SingleBar, Presets } from 'cli-progress';
 import chalk from 'chalk';
 
 // Configuration
@@ -46,6 +45,7 @@ interface Cache {
         error?: string;
         retries?: number;
         lastAttempt?: string;
+        timestamp?: string;
     };
 }
 
