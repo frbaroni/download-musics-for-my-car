@@ -7,8 +7,28 @@ import blessed from 'blessed';
 import chalk from 'chalk';
 // Using require for p-limit since it's a CommonJS module in our setup
 const pLimit = require('p-limit');
+
 // For throttling UI updates
-const throttle = require('lodash.throttle');
+let throttle: Function;
+try {
+    throttle = require('lodash.throttle');
+} catch (error) {
+    console.error('Error loading lodash.throttle: ', error.message);
+    console.error('Please install it using: yarn add lodash.throttle');
+    console.error('Falling back to a simple throttle implementation');
+    
+    // Simple throttle implementation as fallback
+    throttle = function(func: Function, wait: number) {
+        let lastCall = 0;
+        return function(...args: any[]) {
+            const now = Date.now();
+            if (now - lastCall >= wait) {
+                lastCall = now;
+                return func(...args);
+            }
+        };
+    };
+}
 
 // UI refresh control constants
 const RENDER_THROTTLE_MS = 100; // Minimum time between renders
