@@ -19,6 +19,7 @@ const videoUrls = [
 const downloadDirectory = path.join(__dirname, "/Downloaded");
 const cacheFile = path.join(__dirname, "/downloaded_tracks.json");
 const errorsFile = path.join(__dirname, "/errors.txt");
+const fallbackFormat = 'bestvideo+bestaudio/best';
 
 interface Cache {
     [key: string]: boolean;
@@ -36,7 +37,7 @@ if (fs.existsSync(errorsFile)) {
     errors = fs.readJsonSync(errorsFile)
 }
 
-async function downloadTrack(url: string) {
+function downloadTrack(url: string) {
     if (cache[url]) {
         console.log(`Skipping already downloaded track: ${url}`);
         return;
@@ -46,28 +47,29 @@ async function downloadTrack(url: string) {
         return;
     }
 
-    const tempBase = path.join(downloadDirectory, `video_${Date.now()}`);
-    const outputTemplate = `${tempBase}.%(ext)s`;
+    const baseName = `video_${Date.now()}`;
+    const tempOutputTemplate = path.join(downloadDirectory, `${baseName}.%(ext)s`);
 
     try {
         console.log(`Downloading track: ${url}`);
 
-        execSync(`yt-dlp -i --no-overwrites -f "bestvideo+bestaudio/best" -o "${outputTemplate}" --merge-output-format mp4 ${url}`, { stdio: 'inherit' });
+        execSync(`yt-dlp -i --no-overwrites -f "${fallbackFormat}" -o "${tempOutputTemplate}" --merge-output-format mp4 ${url}`, { stdio: 'inherit' });
 
-        const files = fs.readdirSync(downloadDirectory).filter(f => f.startsWith(path.basename(tempBase)));
+        const files = fs.readdirSync(downloadDirectory).filter(f => f.startsWith(baseName));
         if (files.length === 0) throw new Error("No file downloaded");
 
         const downloadedFile = path.join(downloadDirectory, files[0]);
-        const finalOutput = path.join(downloadDirectory, `${path.basename(tempBase)}.mp4`);
+        const transcodedFile = path.join(downloadDirectory, `${baseName}_final.mp4`);
 
-        execSync(`ffmpeg -y -i "${downloadedFile}" -c:v libx264 -profile:v baseline -level 3.0 -c:a aac "${finalOutput}"`, { stdio: 'inherit' });
+        execSync(`ffmpeg -y -i "${downloadedFile}" -c:v libx264 -profile:v baseline -level 3.0 -c:a aac "${transcodedFile}"`, { stdio: 'inherit' });
 
-        fs.removeSync(downloadedFile);
+        fs.removeSync(downloadedFile); // delete original
+        fs.renameSync(transcodedFile, path.join(downloadDirectory, `${baseName}.mp4`)); // rename final output
 
         cache[url] = true;
         fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
 
-        console.log(`Downloaded and transcoded to ${finalOutput}`);
+        console.log(`Downloaded and transcoded to ${baseName}.mp4`);
     } catch (error) {
         console.error(`Failed to download track: ${url}\nError: ${error}`);
         errors[url] = true;
