@@ -99,6 +99,7 @@ const log = (function() {
 const config = {
     playlistUrls: [
         'https://youtube.com/playlist?list=PL6YVnWd7IiQVHepsVJGTO7hodBqMeRg2t', // Topz
+        'https://www.youtube.com/playlist?list=OLAK5uy_k_jFyltFvjyyYWHUugmYak6qFBY5KEf98' // Above and Beyond Acoustic 1
     ],
     videoUrls: [
         'https://youtube.com/watch?v=KtPGD9nakhk', // Sander van Doorn - Purple Haze - Natural One 2019
@@ -685,7 +686,7 @@ async function downloadTrack(url: string): Promise<void> {
             
             const ffmpegArgs = [
                 '-y',
-                '-i', outputPath,
+                '-i', outputPath + '.webm',
                 '-c:v', codec,
                 '-profile:v', profile,
                 '-level', level,
@@ -758,6 +759,7 @@ async function downloadTrack(url: string): Promise<void> {
                     } else {
                         const error = new Error(`Transcoding failed with code ${code}`);
                         (error as any).stderr = transcodeOutput;
+                        log(chalk.red(`FFmpeg failed stderr: ${(error as any).stderr?.slice(-500)}`));
                         reject(error);
                     }
                 });

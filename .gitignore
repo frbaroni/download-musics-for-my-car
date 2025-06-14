@@ -3,3 +3,4 @@ node_modules/*
 downloaded_tracks.json
 errors.json
 .aider*
+sync_state.json
