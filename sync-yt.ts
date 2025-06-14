@@ -483,11 +483,21 @@ const updateActiveDownloads = throttle((activeDownloads: Map<string, TrackInfo>)
 function sanitizeFilename(filename: string): string {
     // More comprehensive sanitization for better file naming
     return filename
-        .replace(/[\\/:"*?<>|]+/g, '-') // Replace invalid file characters with hyphens
-        // Keep spaces instead of replacing with underscores
-        .replace(/--+/g, '-')           // Replace multiple hyphens with single
-        .replace(/^-|-$/g, '')          // Remove leading/trailing hyphens
-        .substring(0, 100);             // Limit filename length
+        // Remove quotes
+        .replace(/['"]+/g, '')
+        // Replace invalid file characters with hyphens
+        .replace(/[\\/:"*?<>|]+/g, '-')
+        // Replace accented characters with simple ASCII equivalents
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        // Replace other non-ASCII characters with hyphens
+        .replace(/[^\x00-\x7F]/g, '-')
+        // Replace multiple hyphens with single
+        .replace(/--+/g, '-')
+        // Remove leading/trailing hyphens
+        .replace(/^-|-$/g, '')
+        // Limit filename length
+        .substring(0, 100);
 }
 
 // Execute a command asynchronously and return its output
