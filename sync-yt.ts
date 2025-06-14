@@ -540,8 +540,293 @@ function safeJsonParse(text: string): any {
     }
 }
 
+// Helper function to resolve the actual downloaded file
+function resolveDownloadedFile(baseOutputPath: string): string {
+    // Check for common extensions that yt-dlp might use
+    const possibleExtensions = ['.mp4', '.webm', '.mkv', '.m4a', '.mp3'];
+    
+    for (const ext of possibleExtensions) {
+        const filePath = baseOutputPath + ext;
+        if (fs.existsSync(filePath)) {
+            log(chalk.blue(`✓ Found downloaded file with extension: ${ext}`));
+            return filePath;
+        }
+    }
+    
+    // If no file is found, log a warning and return the default .webm path
+    // This maintains backward compatibility with the original code
+    log(chalk.yellow(`⚠ Could not find downloaded file for ${baseOutputPath}, falling back to .webm`));
+    return baseOutputPath + '.webm';
+}
+
+// Helper function to build FFmpeg arguments
+function buildFfmpegArgs(inputPath: string, outputPath: string): string[] {
+    const { codec, profile, level, resolution, maxRate, bufSize, audioCodec, audioBitrate } = config.videoFormat;
+    
+    return [
+        '-y',
+        '-i', inputPath,
+        '-c:v', codec,
+        '-profile:v', profile,
+        '-level', level,
+        '-maxrate', maxRate,
+        '-bufsize', bufSize,
+        '-vf', `scale=${resolution}`,
+        '-c:a', audioCodec,
+        '-b:a', audioBitrate,
+        outputPath
+    ];
+}
+
 // Active downloads tracking
 const activeDownloads = new Map<string, TrackInfo>();
+
+// Fetch metadata for a track
+async function fetchMetadata(url: string): Promise<{ title: string; duration: number; sanitizedTitle: string }> {
+    log(chalk.blue(`🔍 Fetching metadata for: ${url}`));
+    
+    // Use enhanced parameters for metadata fetching
+    const metadataOutput = await execAsync('yt-dlp', [
+        '--cookies-from-browser', 'vivaldi:Default', 
+        '-j', 
+        ...ytdlpExtraParams,
+        url
+    ]);
+    
+    const metadata = safeJsonParse(metadataOutput);
+    const title = metadata.title;
+    const duration = metadata.duration || 0; // Default to 0 if duration is not available
+    const sanitizedTitle = sanitizeFilename(title);
+    
+    return { title, duration, sanitizedTitle };
+}
+
+// Download video using yt-dlp
+async function downloadVideo(url: string, outputPath: string, trackInfo: TrackInfo): Promise<void> {
+    log(chalk.blue(`⬇️ Downloading: ${chalk.bold(trackInfo.title)}`));
+    
+    // Update status to downloading
+    trackInfo.status = 'downloading';
+    activeDownloads.set(url, trackInfo);
+    updateActiveDownloads(activeDownloads);
+    
+    // Build download command with extra parameters to handle signature issues
+    const downloadArgs = [
+        '-i', 
+        '--no-overwrites', 
+        '--cookies-from-browser', 'vivaldi:Default',
+        '-f', fallbackFormat, 
+        '--force-overwrites',  // Force overwrite if needed
+        '--no-playlist',  // Ensure we only download the single video
+        '--downloader', 'aria2c',  // Try using aria2c downloader for better reliability
+        '--downloader-args', 'aria2c:"-x 16 -s 16 -k 1M"',  // Optimize aria2c parameters
+        ...ytdlpExtraParams,  // Add our extra parameters for handling signature issues
+        '-o', outputPath, 
+        url
+    ];
+    
+    log(chalk.gray(`Running yt-dlp with enhanced parameters to handle signature issues`));
+    const downloadProcess = spawn('yt-dlp', downloadArgs, { stdio: 'pipe' });
+    
+    activeProcesses.add(downloadProcess);
+    trackInfo.process = downloadProcess;
+    activeDownloads.set(url, trackInfo);
+    
+    // Wait for download to complete
+    await new Promise<void>((resolve, reject) => {
+        let downloadOutput = '';
+        
+        if (downloadProcess.stdout) {
+            downloadProcess.stdout.on('data', (data) => {
+                downloadOutput += data.toString();
+                // Could parse progress here if needed
+            });
+        }
+        
+        if (downloadProcess.stderr) {
+            downloadProcess.stderr.on('data', (data) => {
+                const errorText = data.toString();
+                // Try to parse progress information from yt-dlp
+                // Example: [download]   4.7% of ~ 153.81MiB at    2.19MiB/s ETA 01:12 (frag 41/926)
+                const progressMatch = errorText.match(/\[download\]\s+(\d+\.\d+)%\s+of\s+~?\s*(\d+\.\d+)(\w+)\s+at\s+(\d+\.\d+)(\w+)\/s\s+ETA\s+(\d+:\d+)/);
+                if (progressMatch) {
+                    const [, percent, size, sizeUnit, speed, speedUnit, eta] = progressMatch;
+                    trackInfo.progress = parseFloat(percent);
+                    trackInfo.size = `${size}${sizeUnit}`;
+                    trackInfo.speed = `${speed}${speedUnit}/s`;
+                    trackInfo.eta = eta;
+                    activeDownloads.set(url, trackInfo);
+                    updateActiveDownloads(activeDownloads);
+                }
+                log(chalk.yellow(`Download warning: ${errorText.trim()}`));
+            });
+        }
+        
+        downloadProcess.on('close', (code) => {
+            activeProcesses.delete(downloadProcess);
+            if (code === 0) {
+                resolve();
+            } else {
+                const error = new Error(`Download failed with code ${code}`);
+                (error as any).stdout = downloadOutput;
+                reject(error);
+            }
+        });
+        
+        downloadProcess.on('error', (error) => {
+            activeProcesses.delete(downloadProcess);
+            reject(error);
+        });
+    });
+}
+
+// Transcode video using FFmpeg
+async function transcodeVideo(inputPath: string, outputPath: string, trackInfo: TrackInfo): Promise<void> {
+    log(chalk.magenta(`🔄 Transcoding: ${chalk.bold(trackInfo.title)}`));
+    
+    // Update status to transcoding
+    trackInfo.status = 'transcoding';
+    activeDownloads.set(trackInfo.url, trackInfo);
+    updateActiveDownloads(activeDownloads);
+    
+    // Build FFmpeg arguments
+    const ffmpegArgs = buildFfmpegArgs(inputPath, outputPath);
+    
+    const transcodeProcess = spawn('ffmpeg', ffmpegArgs, { stdio: 'pipe' });
+    activeProcesses.add(transcodeProcess);
+    trackInfo.process = transcodeProcess;
+    activeDownloads.set(trackInfo.url, trackInfo);
+    
+    // Wait for transcoding to complete
+    await new Promise<void>((resolve, reject) => {
+        let transcodeOutput = '';
+        
+        if (transcodeProcess.stdout) {
+            transcodeProcess.stdout.on('data', (data) => {
+                transcodeOutput += data.toString();
+            });
+        }
+        
+        if (transcodeProcess.stderr) {
+            transcodeProcess.stderr.on('data', (data) => {
+                const text = data.toString();
+                // FFmpeg outputs progress to stderr
+                transcodeOutput += text;
+                
+                // Try to parse FFmpeg progress information
+                const timeMatch = text.match(/time=(\d+:\d+:\d+\.\d+)/);
+                if (timeMatch) {
+                    const time = timeMatch[1];
+                    
+                    // Look for duration in the accumulated output
+                    const durationMatch = transcodeOutput.match(/Duration: (\d+:\d+:\d+\.\d+)/);
+                    
+                    if (durationMatch) {
+                        const duration = durationMatch[1];
+                        
+                        // Convert time and duration to seconds
+                        const timeSeconds = timeToSeconds(time);
+                        const durationSeconds = timeToSeconds(duration);
+                        
+                        if (durationSeconds > 0) {
+                            const percent = (timeSeconds / durationSeconds) * 100;
+                            trackInfo.progress = percent;
+                            
+                            // Calculate ETA
+                            const remainingSeconds = durationSeconds - timeSeconds;
+                            if (remainingSeconds > 0) {
+                                trackInfo.eta = formatTime(remainingSeconds);
+                            }
+                            
+                            activeDownloads.set(trackInfo.url, trackInfo);
+                            updateActiveDownloads(activeDownloads);
+                        }
+                    }
+                }
+            });
+        }
+        
+        transcodeProcess.on('close', (code) => {
+            activeProcesses.delete(transcodeProcess);
+            if (code === 0) {
+                resolve();
+            } else {
+                const error = new Error(`Transcoding failed with code ${code}`);
+                (error as any).stderr = transcodeOutput;
+                log(chalk.red(`FFmpeg failed stderr: ${(error as any).stderr?.slice(-500)}`));
+                reject(error);
+            }
+        });
+        
+        transcodeProcess.on('error', (error) => {
+            activeProcesses.delete(transcodeProcess);
+            reject(error);
+        });
+    });
+}
+
+// Finalize track by replacing original with transcoded version and updating state
+async function finalizeTrack(url: string, title: string, outputPath: string, tempOutput: string): Promise<void> {
+    log(chalk.green(`✓ Finalizing: ${chalk.bold(title)}`));
+    
+    // Replace original with transcoded version
+    fs.removeSync(outputPath);
+    fs.renameSync(tempOutput, outputPath);
+    
+    // Update state
+    appState.tracks[url] = {
+        downloaded: true,
+        title: title,
+        lastAttempt: new Date().toISOString(),
+        timestamp: new Date().toISOString()
+    };
+    fs.writeJsonSync(stateFile, appState, { spaces: 2 });
+    
+    // Update counters and UI
+    appState.stats.completedTracks++;
+    updateStatus();
+    log(chalk.green(`✓ Completed: ${chalk.bold(title)}`));
+}
+
+// Handle track download errors
+function handleTrackError(url: string, error: any, trackInfo?: TrackInfo): void {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(chalk.red(`❌ Error processing ${url}: ${errorMessage}`));
+    
+    // Log additional error details if available
+    if (error && (error as any).stdout) {
+        log(chalk.yellow(`Command output: ${(error as any).stdout.toString()}`));
+    }
+    if (error && (error as any).stderr) {
+        log(chalk.yellow(`Command error output: ${(error as any).stderr.toString()}`));
+    }
+    
+    // Log stack trace for debugging
+    if (error instanceof Error && error.stack) {
+        log(chalk.red(`Stack trace for ${url.substring(0, 30)}...: ${error.stack.split('\n')[0]}`));
+    }
+    
+    // Update state with error
+    appState.tracks[url] = {
+        downloaded: false,
+        title: trackInfo?.title,
+        error: errorMessage,
+        retries: (appState.tracks[url]?.retries || 0) + 1,
+        lastAttempt: new Date().toISOString(),
+        timestamp: new Date().toISOString()
+    };
+    fs.writeJsonSync(stateFile, appState, { spaces: 2 });
+    
+    // Update counters and UI
+    appState.stats.errorTracks++;
+    updateStatus();
+    
+    // Remove from active downloads
+    if (trackInfo) {
+        activeDownloads.delete(url);
+        updateActiveDownloads(activeDownloads);
+    }
+}
 
 async function downloadTrack(url: string): Promise<void> {
     // Skip if already downloaded successfully
@@ -572,263 +857,36 @@ async function downloadTrack(url: string): Promise<void> {
         activeDownloads.set(url, trackInfo);
         updateActiveDownloads(activeDownloads);
 
-        // Fetch metadata
-        log(chalk.blue(`🔍 Fetching metadata for: ${url}`));
-        try {
-            // Use enhanced parameters for metadata fetching too
-            const metadataOutput = await execAsync('yt-dlp', [
-                '--cookies-from-browser', 'vivaldi:Default', 
-                '-j', 
-                ...ytdlpExtraParams,
-                url
-            ]);
-            const metadata = safeJsonParse(metadataOutput);
-            const title = metadata.title;
-            const duration = metadata.duration;
-            const sanitizedTitle = sanitizeFilename(title);
-            const outputPath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
+        // Fetch metadata using the extracted function
+        const { title, duration, sanitizedTitle } = await fetchMetadata(url);
+        const outputPath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
             
-            // Update active downloads with title
-            trackInfo = { 
-                url, 
-                title, 
-                status: 'downloading' 
-            };
-            activeDownloads.set(url, trackInfo);
-            updateActiveDownloads(activeDownloads);
+        // Update trackInfo with title
+        trackInfo.title = title;
+        activeDownloads.set(url, trackInfo);
+        updateActiveDownloads(activeDownloads);
 
-            // Download video
-            log(chalk.blue(`⬇️ Downloading: ${chalk.bold(title)}`));
-            
-            // Build download command with extra parameters to handle signature issues
-            const downloadArgs = [
-                '-i', 
-                '--no-overwrites', 
-                '--cookies-from-browser', 'vivaldi:Default',
-                '-f', fallbackFormat, 
-                '--force-overwrites',  // Force overwrite if needed
-                '--no-playlist',  // Ensure we only download the single video
-                '--downloader', 'aria2c',  // Try using aria2c downloader for better reliability
-                '--downloader-args', 'aria2c:"-x 16 -s 16 -k 1M"',  // Optimize aria2c parameters
-                ...ytdlpExtraParams,  // Add our extra parameters for handling signature issues
-                '-o', outputPath, 
-                url
-            ];
-            
-            log(chalk.gray(`Running yt-dlp with enhanced parameters to handle signature issues`));
-            const downloadProcess = spawn('yt-dlp', downloadArgs, { stdio: 'pipe' });
-            
-            activeProcesses.add(downloadProcess);
-            trackInfo.process = downloadProcess;
-            activeDownloads.set(url, trackInfo);
-            
-            // Wait for download to complete
-            await new Promise<void>((resolve, reject) => {
-                let downloadOutput = '';
-                
-                if (downloadProcess.stdout) {
-                    downloadProcess.stdout.on('data', (data) => {
-                        downloadOutput += data.toString();
-                        // Could parse progress here if needed
-                    });
-                }
-                
-                if (downloadProcess.stderr) {
-                    downloadProcess.stderr.on('data', (data) => {
-                        const errorText = data.toString();
-                        // Try to parse progress information from yt-dlp
-                        // Example: [download]   4.7% of ~ 153.81MiB at    2.19MiB/s ETA 01:12 (frag 41/926)
-                        const progressMatch = errorText.match(/\[download\]\s+(\d+\.\d+)%\s+of\s+~?\s*(\d+\.\d+)(\w+)\s+at\s+(\d+\.\d+)(\w+)\/s\s+ETA\s+(\d+:\d+)/);
-                        if (progressMatch) {
-                            const [, percent, size, sizeUnit, speed, speedUnit, eta] = progressMatch;
-                            trackInfo.progress = parseFloat(percent);
-                            trackInfo.size = `${size}${sizeUnit}`;
-                            trackInfo.speed = `${speed}${speedUnit}/s`;
-                            trackInfo.eta = eta;
-                            activeDownloads.set(url, trackInfo);
-                            updateActiveDownloads(activeDownloads);
-                        }
-                        log(chalk.yellow(`Download warning: ${errorText.trim()}`));
-                    });
-                }
-                
-                downloadProcess.on('close', (code) => {
-                    activeProcesses.delete(downloadProcess);
-                    if (code === 0) {
-                        resolve();
-                    } else {
-                        const error = new Error(`Download failed with code ${code}`);
-                        (error as any).stdout = downloadOutput;
-                        reject(error);
-                    }
-                });
-                
-                downloadProcess.on('error', (error) => {
-                    activeProcesses.delete(downloadProcess);
-                    reject(error);
-                });
-            });
+        // Download video using the extracted function
+        await downloadVideo(url, outputPath, trackInfo);
 
-            // Update status to transcoding
-            trackInfo = { 
-                url, 
-                title, 
-                status: 'transcoding' 
-            };
-            activeDownloads.set(url, trackInfo);
-            updateActiveDownloads(activeDownloads);
+        // Prepare for transcoding
+        const tempOutput = path.join(downloadDirectory, `${sanitizedTitle}_temp.mp4`);
+        
+        // Resolve the actual downloaded file
+        const inputPath = resolveDownloadedFile(outputPath);
+        
+        // Transcode video using the extracted function
+        await transcodeVideo(inputPath, tempOutput, trackInfo);
 
-            // Transcode for car multimedia compatibility
-            log(chalk.magenta(`🔄 Transcoding: ${chalk.bold(title)}`));
-            const tempOutput = path.join(downloadDirectory, `${sanitizedTitle}_temp.mp4`);
-            
-            const { codec, profile, level, resolution, maxRate, bufSize, audioCodec, audioBitrate } = config.videoFormat;
-            
-            const ffmpegArgs = [
-                '-y',
-                '-i', outputPath + '.webm',
-                '-c:v', codec,
-                '-profile:v', profile,
-                '-level', level,
-                '-maxrate', maxRate,
-                '-bufsize', bufSize,
-                '-vf', `scale=${resolution}`,
-                '-c:a', audioCodec,
-                '-b:a', audioBitrate,
-                tempOutput
-            ];
-            
-            const transcodeProcess = spawn('ffmpeg', ffmpegArgs, { stdio: 'pipe' });
-            activeProcesses.add(transcodeProcess);
-            trackInfo.process = transcodeProcess;
-            activeDownloads.set(url, trackInfo);
-            
-            // Wait for transcoding to complete
-            await new Promise<void>((resolve, reject) => {
-                let transcodeOutput = '';
-                
-                if (transcodeProcess.stdout) {
-                    transcodeProcess.stdout.on('data', (data) => {
-                        transcodeOutput += data.toString();
-                    });
-                }
-                
-                if (transcodeProcess.stderr) {
-                    transcodeProcess.stderr.on('data', (data) => {
-                        const text = data.toString();
-                        // FFmpeg outputs progress to stderr
-                        transcodeOutput += text;
-                        
-                        // Try to parse FFmpeg progress information
-                        const timeMatch = text.match(/time=(\d+:\d+:\d+\.\d+)/);
-                        if (timeMatch) {
-                            const time = timeMatch[1];
-                            
-                            // Look for duration in the accumulated output
-                            const durationMatch = transcodeOutput.match(/Duration: (\d+:\d+:\d+\.\d+)/);
-                            
-                            if (durationMatch) {
-                                const duration = durationMatch[1];
-                                
-                                // Convert time and duration to seconds
-                                const timeSeconds = timeToSeconds(time);
-                                const durationSeconds = timeToSeconds(duration);
-                                
-                                if (durationSeconds > 0) {
-                                    const percent = (timeSeconds / durationSeconds) * 100;
-                                    trackInfo.progress = percent;
-                                    
-                                    // Calculate ETA
-                                    const remainingSeconds = durationSeconds - timeSeconds;
-                                    if (remainingSeconds > 0) {
-                                        trackInfo.eta = formatTime(remainingSeconds);
-                                    }
-                                    
-                                    activeDownloads.set(url, trackInfo);
-                                    updateActiveDownloads(activeDownloads);
-                                }
-                            }
-                        }
-                    });
-                }
-                
-                transcodeProcess.on('close', (code) => {
-                    activeProcesses.delete(transcodeProcess);
-                    if (code === 0) {
-                        resolve();
-                    } else {
-                        const error = new Error(`Transcoding failed with code ${code}`);
-                        (error as any).stderr = transcodeOutput;
-                        log(chalk.red(`FFmpeg failed stderr: ${(error as any).stderr?.slice(-500)}`));
-                        reject(error);
-                    }
-                });
-                
-                transcodeProcess.on('error', (error) => {
-                    activeProcesses.delete(transcodeProcess);
-                    reject(error);
-                });
-            });
-
-            // Replace original with transcoded version
-            fs.removeSync(outputPath);
-            fs.renameSync(tempOutput, outputPath);
-
-            // Update state
-            appState.tracks[url] = {
-                downloaded: true,
-                title: title,
-                lastAttempt: new Date().toISOString()
-            };
-            fs.writeJsonSync(stateFile, appState, { spaces: 2 });
-
-            // Update counters and UI
-            appState.stats.completedTracks++;
-            updateStatus();
-            log(chalk.green(`✓ Completed: ${chalk.bold(title)}`));
-        } catch (innerError) {
-            const innerErrorMsg = innerError instanceof Error ? innerError.message : String(innerError);
-            log(chalk.red(`❌ Error processing ${url}: ${innerErrorMsg}`));
-            
-            // If the error has stdout/stderr, log it
-            if (innerError && (innerError as any).stdout) {
-                log(chalk.yellow(`Command output: ${(innerError as any).stdout.toString()}`));
-            }
-            if (innerError && (innerError as any).stderr) {
-                log(chalk.yellow(`Command error output: ${(innerError as any).stderr.toString()}`));
-            }
-            
-            throw innerError; // Re-throw to be caught by outer catch
-        }
+        // Finalize the track using the extracted function
+        await finalizeTrack(url, title, outputPath, tempOutput);
         
         // Remove from active downloads
         activeDownloads.delete(url);
         updateActiveDownloads(activeDownloads);
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        log(chalk.red(`❌ Error downloading ${url}: ${errorMessage}`));
-        
-        if (error instanceof Error && error.stack) {
-            log(chalk.red(`Stack trace for ${url.substring(0, 30)}...: ${error.stack.split('\n')[0]}`));
-        }
-        
-        // Update state with error
-        appState.tracks[url] = {
-            downloaded: false,
-            error: errorMessage,
-            retries: (appState.tracks[url]?.retries || 0) + 1,
-            lastAttempt: new Date().toISOString(),
-            timestamp: new Date().toISOString()
-        };
-        fs.writeJsonSync(stateFile, appState, { spaces: 2 });
-        
-        // Update counters and UI
-        appState.stats.errorTracks++;
-        updateStatus();
-        
-        // Remove from active downloads
-        activeDownloads.delete(url);
-        updateActiveDownloads(activeDownloads);
+        // Handle error using the extracted function
+        handleTrackError(url, error, trackInfo);
     }
 }
 
