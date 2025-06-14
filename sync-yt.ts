@@ -1104,6 +1104,13 @@ async function main() {
         // Display help
         displayHelp();
         
+        // Reset stats counters for this run
+        appState.stats = {
+            totalTracks: 0,
+            completedTracks: 0,
+            errorTracks: 0
+        };
+        
         // Get all tracks
         log(chalk.blue('📋 Gathering tracks from playlists and videos...'));
         const allTracks: string[] = [];
