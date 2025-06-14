@@ -61,39 +61,39 @@ let lastScreenRender = Date.now();
 // Debug flag for console logging
 const DEBUG = false;
 
-// Throttled log function to prevent UI freezing with too many updates
-const log = (function() {
-    // The actual logging function
-    function logMessage(message: string) {
-        const timestamp = new Date().toLocaleTimeString();
-        const formattedMessage = `${chalk.gray(`[${timestamp}]`)} ${message}`;
-        
-        // Add to buffer for memory management
-        logBuffer.push(formattedMessage);
-        if (logBuffer.length > LOG_BUFFER_SIZE) {
-            logBuffer.shift(); // Remove oldest log entry
-        }
-        
-        try {
-            // Log to UI - use pushLine instead of log to ensure proper containment
-            logBox.pushLine(formattedMessage);
-            // Only log to console if debugging is enabled
-            if (DEBUG) {
-                console.log(`${timestamp} ${message}`);
-            }
-            
-            // Request a render, but don't force it immediately
-            uiNeedsUpdate = true;
-        } catch (error) {
-            // Fallback to console if UI fails
-            console.error(`${timestamp} ${message}`);
-            console.error('UI error:', error);
-        }
+// Immediate log function without throttling
+const log = function(message: string) {
+    const timestamp = new Date().toLocaleTimeString();
+    const formattedMessage = `${chalk.gray(`[${timestamp}]`)} ${message}`;
+    
+    // Add to buffer for memory management
+    logBuffer.push(formattedMessage);
+    if (logBuffer.length > LOG_BUFFER_SIZE) {
+        logBuffer.shift(); // Remove oldest log entry
     }
     
-    // Return the throttled version
-    return throttle(logMessage, RENDER_THROTTLE_MS / 2);
-})();
+    try {
+        // Log to UI - use pushLine instead of log to ensure proper containment
+        logBox.pushLine(formattedMessage);
+        // Only log to console if debugging is enabled
+        if (DEBUG) {
+            console.log(`${timestamp} ${message}`);
+        }
+        
+        // Force immediate render
+        try {
+            screen.render();
+            lastScreenRender = Date.now();
+            uiNeedsUpdate = false;
+        } catch (renderError) {
+            console.error('Error rendering screen:', renderError);
+        }
+    } catch (error) {
+        // Fallback to console if UI fails
+        console.error(`${timestamp} ${message}`);
+        console.error('UI error:', error);
+    }
+};
 
 // Configuration
 const config = {
