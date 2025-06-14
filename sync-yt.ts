@@ -122,8 +122,9 @@ const config = {
     }
 };
 
-// Directory to save the downloaded music
+// Directories for downloaded music and temporary files
 const downloadDirectory = path.join(__dirname, "/Downloaded");
+const tempDirectory = path.join(__dirname, "/Temp");
 const stateFile = path.join(__dirname, "/sync_state.json");
 // More flexible format selection to handle signature extraction issues
 const fallbackFormat = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best';
@@ -428,7 +429,7 @@ const updateActiveDownloads = throttle((activeDownloads: Map<string, TrackInfo>)
         activeBox.pushLine('  No active downloads');
     } else {
         // Define fixed widths for each column
-        const titleWidth = 40;
+        const titleWidth = 160;
         const statusWidth = 15;
         const progressWidth = 10;
         const sizeWidth = 15;
@@ -829,12 +830,31 @@ function handleTrackError(url: string, error: any, trackInfo?: TrackInfo): void 
 }
 
 async function downloadTrack(url: string): Promise<void> {
-    // Skip if already downloaded successfully
+    // Check if already downloaded successfully
     if (appState.tracks[url]?.downloaded) {
-        log(chalk.gray(`Skipping already downloaded track: ${url}`));
-        appState.stats.completedTracks++;
-        updateStatus();
-        return;
+        // Get the title and check if the file exists
+        const title = appState.tracks[url].title;
+        if (title) {
+            const sanitizedTitle = sanitizeFilename(title);
+            const expectedFilePath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
+            
+            if (fs.existsSync(expectedFilePath)) {
+                log(chalk.gray(`Skipping already downloaded track: ${title}`));
+                appState.stats.completedTracks++;
+                updateStatus();
+                return;
+            } else {
+                // File doesn't exist, reset the downloaded flag
+                log(chalk.yellow(`⚠ Track marked as downloaded but file not found: ${title}`));
+                log(chalk.blue(`🔄 Resetting download state for: ${title}`));
+                appState.tracks[url].downloaded = false;
+                // Don't increment error count as we're going to retry
+            }
+        } else {
+            // No title in state, reset the downloaded flag
+            log(chalk.yellow(`⚠ Track marked as downloaded but missing title information`));
+            appState.tracks[url].downloaded = false;
+        }
     }
 
     // Skip if too many retries
@@ -859,27 +879,50 @@ async function downloadTrack(url: string): Promise<void> {
 
         // Fetch metadata using the extracted function
         const { title, duration, sanitizedTitle } = await fetchMetadata(url);
-        const outputPath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
+        
+        // Final output path in the download directory
+        const finalOutputPath = path.join(downloadDirectory, `${sanitizedTitle}.mp4`);
+        
+        // Temporary paths in the temp directory
+        const tempDownloadPath = path.join(tempDirectory, `${sanitizedTitle}_download`);
+        const tempTranscodePath = path.join(tempDirectory, `${sanitizedTitle}_transcode.mp4`);
             
         // Update trackInfo with title
         trackInfo.title = title;
         activeDownloads.set(url, trackInfo);
         updateActiveDownloads(activeDownloads);
 
-        // Download video using the extracted function
-        await downloadVideo(url, outputPath, trackInfo);
+        // Download video to temp directory
+        await downloadVideo(url, tempDownloadPath, trackInfo);
 
-        // Prepare for transcoding
-        const tempOutput = path.join(downloadDirectory, `${sanitizedTitle}_temp.mp4`);
-        
         // Resolve the actual downloaded file
-        const inputPath = resolveDownloadedFile(outputPath);
+        const inputPath = resolveDownloadedFile(tempDownloadPath);
         
-        // Transcode video using the extracted function
-        await transcodeVideo(inputPath, tempOutput, trackInfo);
+        // Transcode video to temp directory
+        await transcodeVideo(inputPath, tempTranscodePath, trackInfo);
 
-        // Finalize the track using the extracted function
-        await finalizeTrack(url, title, outputPath, tempOutput);
+        // Move the final transcoded file to the download directory
+        await finalizeTrack(url, title, finalOutputPath, tempTranscodePath);
+        
+        // Clean up any temporary files
+        try {
+            if (fs.existsSync(inputPath)) {
+                fs.removeSync(inputPath);
+                log(chalk.gray(`🧹 Cleaned up temporary download file: ${path.basename(inputPath)}`));
+            }
+            // Check for other possible temp files with different extensions
+            const tempFilePattern = path.join(tempDirectory, `${sanitizedTitle}_download.*`);
+            const tempFiles = fs.readdirSync(tempDirectory)
+                .filter(file => file.startsWith(`${sanitizedTitle}_download`));
+            
+            for (const file of tempFiles) {
+                fs.removeSync(path.join(tempDirectory, file));
+                log(chalk.gray(`🧹 Cleaned up temporary file: ${file}`));
+            }
+        } catch (cleanupError) {
+            // Just log cleanup errors, don't fail the download
+            log(chalk.yellow(`⚠ Error during cleanup: ${cleanupError}`));
+        }
         
         // Remove from active downloads
         activeDownloads.delete(url);
@@ -1045,14 +1088,16 @@ async function main() {
             return;
         }
         
-        // Create download directory if it doesn't exist
+        // Create download and temp directories if they don't exist
         try {
             fs.ensureDirSync(downloadDirectory);
+            fs.ensureDirSync(tempDirectory);
             log(chalk.green(`✓ Download directory ready: ${downloadDirectory}`));
+            log(chalk.green(`✓ Temp directory ready: ${tempDirectory}`));
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            log(chalk.red(`❌ Failed to create download directory: ${errorMessage}`));
-            log(chalk.red(`Path: ${downloadDirectory}`));
+            log(chalk.red(`❌ Failed to create directories: ${errorMessage}`));
+            log(chalk.red(`Paths: ${downloadDirectory}, ${tempDirectory}`));
             process.exit(1);
         }
 
